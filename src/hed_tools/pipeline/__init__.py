@@ -1,8 +1,8 @@
-"""HED Sidecar Generation Pipeline.
+"""HED Sidecar Generation Pipeline Package.
 
 This package provides a modular pipeline architecture for generating HED sidecars
-from BIDS event files. The pipeline consists of configurable stages that handle
-data ingestion, column classification, HED mapping, and validation.
+from event data files, with support for performance optimization, caching, and
+parallel processing.
 
 Architecture:
 - Core pipeline orchestration and stage management
@@ -13,12 +13,26 @@ Architecture:
 
 from .core import (
     PipelineStage,
-    SidecarPipeline,
     PipelineContext,
     StageStatus,
+    SidecarPipeline,
     PipelineException,
 )
-from .config import PipelineConfig, StageConfig
+
+from .config import PipelineConfig, StageConfig, ConfigurationError
+
+from .performance import (
+    PipelinePerformanceManager,
+    PerformanceProfiler,
+    AdvancedCache,
+    ParallelProcessor,
+    MemoryOptimizer,
+    PerformanceTestFramework,
+    create_optimized_pipeline_manager,
+    performance_decorator,
+)
+
+# Import all pipeline stages
 from .stages import (
     DataIngestionStage,
     ColumnClassificationStage,
@@ -28,24 +42,31 @@ from .stages import (
 )
 
 __all__ = [
-    # Core components
+    # Core pipeline components
     "PipelineStage",
-    "SidecarPipeline",
     "PipelineContext",
     "StageStatus",
+    "SidecarPipeline",
     "PipelineException",
     # Configuration
     "PipelineConfig",
     "StageConfig",
+    "ConfigurationError",
+    # Performance optimization
+    "PipelinePerformanceManager",
+    "PerformanceProfiler",
+    "AdvancedCache",
+    "ParallelProcessor",
+    "MemoryOptimizer",
+    "PerformanceTestFramework",
+    "create_optimized_pipeline_manager",
+    "performance_decorator",
     # Pipeline stages
     "DataIngestionStage",
     "ColumnClassificationStage",
     "HEDMappingStage",
     "SidecarGenerationStage",
     "ValidationStage",
-    # Factory functions
-    "create_sidecar_pipeline",
-    "create_default_pipeline",
 ]
 
 
@@ -63,13 +84,6 @@ def create_sidecar_pipeline(config: PipelineConfig = None) -> SidecarPipeline:
 
     pipeline = SidecarPipeline(config)
 
-    # Register default stage implementations
-    pipeline.register_stage_type(DataIngestionStage)
-    pipeline.register_stage_type(ColumnClassificationStage)
-    pipeline.register_stage_type(HEDMappingStage)
-    pipeline.register_stage_type(SidecarGenerationStage)
-    pipeline.register_stage_type(ValidationStage)
-
     return pipeline
 
 
@@ -83,16 +97,29 @@ def create_default_pipeline() -> SidecarPipeline:
     pipeline = create_sidecar_pipeline(config)
 
     # Add default stage instances in execution order
-    pipeline.add_stage("data_ingestion", config.stage_configs.get("data_ingestion", {}))
     pipeline.add_stage(
-        "column_classification", config.stage_configs.get("column_classification", {})
+        DataIngestionStage(
+            "DataIngestion", config.stage_configs.get("data_ingestion", {})
+        )
     )
-    pipeline.add_stage("hed_mapping", config.stage_configs.get("hed_mapping", {}))
     pipeline.add_stage(
-        "sidecar_generation", config.stage_configs.get("sidecar_generation", {})
+        ColumnClassificationStage(
+            "ColumnClassification",
+            config.stage_configs.get("column_classification", {}),
+        )
+    )
+    pipeline.add_stage(
+        HEDMappingStage("HEDMapping", config.stage_configs.get("hed_mapping", {}))
+    )
+    pipeline.add_stage(
+        SidecarGenerationStage(
+            "SidecarGeneration", config.stage_configs.get("sidecar_generation", {})
+        )
     )
 
     if config.validation_enabled:
-        pipeline.add_stage("validation", config.stage_configs.get("validation", {}))
+        pipeline.add_stage(
+            ValidationStage("Validation", config.stage_configs.get("validation", {}))
+        )
 
     return pipeline

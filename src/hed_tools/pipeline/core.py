@@ -13,7 +13,10 @@ import time
 from abc import ABC, abstractmethod
 from dataclasses import dataclass, field
 from enum import Enum
-from typing import Any, Dict, List, Optional, Type
+from typing import Any, Dict, List, Optional
+
+from .config import PipelineConfig
+from .performance import create_optimized_pipeline_manager
 
 logger = logging.getLogger(__name__)
 
@@ -203,222 +206,364 @@ class PipelineStage(ABC):
 
 
 class SidecarPipeline:
-    """Main pipeline orchestrator for HED sidecar generation.
+    """Enhanced pipeline with performance optimization capabilities.
 
-    This class manages the execution of pipeline stages, handles errors,
-    and provides monitoring and performance tracking capabilities.
+    This pipeline includes:
+    - Performance monitoring and profiling
+    - Intelligent caching
+    - Parallel processing for independent stages
+    - Memory optimization
+    - Comprehensive error handling
     """
 
-    def __init__(self, config):
-        """Initialize the pipeline.
-
-        Args:
-            config: PipelineConfig instance
-        """
+    def __init__(self, config: PipelineConfig):
         self.config = config
         self.stages: List[PipelineStage] = []
-        self.stage_registry: Dict[str, Type[PipelineStage]] = {}
         self.logger = logging.getLogger("pipeline.core")
-        self._execution_id: Optional[str] = None
 
-    def register_stage_type(self, stage_class: Type[PipelineStage]):
-        """Register a stage class for dynamic instantiation.
+        # Initialize performance manager
+        performance_config = {
+            "enable_memory_tracking": True,
+            "cache_size": 1000,
+            "cache_ttl": 3600,
+            "target_total_time": 10.0,
+            "target_stage_time": 3.0,
+            "memory_limit_mb": 500,
+        }
 
-        Args:
-            stage_class: PipelineStage subclass to register
-        """
-        stage_name = stage_class.__name__
-        self.stage_registry[stage_name] = stage_class
-        self.logger.debug(f"Registered stage type: {stage_name}")
+        self.performance_manager = create_optimized_pipeline_manager(performance_config)
 
-    def add_stage(
-        self, stage_name: str, stage_config: Dict[str, Any] = None
-    ) -> PipelineStage:
-        """Add a stage instance to the pipeline.
+        # Stage execution tracking
+        self.execution_history: List[Dict[str, Any]] = []
 
-        Args:
-            stage_name: Name of the stage class to instantiate
-            stage_config: Configuration for the stage instance
+    def add_stage(self, stage: PipelineStage) -> None:
+        """Add a stage to the pipeline."""
+        self.stages.append(stage)
+        self.logger.debug(f"Added stage: {stage.name}")
 
-        Returns:
-            The created stage instance
+    def add_stages(self, stages: List[PipelineStage]) -> None:
+        """Add multiple stages to the pipeline."""
+        for stage in stages:
+            self.add_stage(stage)
 
-        Raises:
-            ValueError: If stage_name is not registered
-        """
-        # Convert snake_case to CamelCase for class lookup
-        class_name = self._snake_to_camel(stage_name)
+    async def execute(self, context: PipelineContext) -> bool:
+        """Execute the pipeline with performance optimization."""
+        pipeline_start_time = time.time()
+        self.logger.info(f"Starting pipeline execution with {len(self.stages)} stages")
 
-        if class_name not in self.stage_registry:
-            available_stages = list(self.stage_registry.keys())
-            raise ValueError(
-                f"Stage '{class_name}' not registered. Available: {available_stages}"
-            )
-
-        stage_class = self.stage_registry[class_name]
-        stage_instance = stage_class(stage_name, stage_config or {})
-        self.stages.append(stage_instance)
-
-        self.logger.info(f"Added stage: {stage_name} ({class_name})")
-        return stage_instance
-
-    def _snake_to_camel(self, snake_str: str) -> str:
-        """Convert snake_case to CamelCase."""
-        components = snake_str.split("_")
-        return "".join(word.capitalize() for word in components) + "Stage"
-
-    async def execute(self, context: PipelineContext) -> Dict[str, Any]:
-        """Execute the complete pipeline.
-
-        Args:
-            context: Pipeline context with input data
-
-        Returns:
-            Dictionary containing execution results and metadata
-        """
-        self._execution_id = f"exec_{int(time.time())}"
-        context.start_timing()
-
-        self.logger.info(
-            f"Starting pipeline execution {self._execution_id} with {len(self.stages)} stages"
-        )
-
-        results = {
+        # Initialize execution tracking
+        execution_summary = {
+            "pipeline_start_time": pipeline_start_time,
+            "stages_executed": [],
+            "total_stages": len(self.stages),
             "success": True,
-            "execution_id": self._execution_id,
-            "stage_results": {},
             "errors": [],
-            "warnings": [],
-            "performance": {},
+            "performance_metrics": {},
         }
 
         try:
-            # Execute stages in order
-            for stage in self.stages:
-                stage_success = await self._execute_stage_with_monitoring(
-                    stage, context
-                )
+            # Check for parallelizable stages
+            parallelizable_stages = self._identify_parallelizable_stages()
 
-                # Record stage results
-                results["stage_results"][stage.name] = {
-                    "success": stage_success,
-                    "status": stage.status.value,
-                    "duration": stage.get_duration(),
-                    "result": context.get_stage_result(stage.name),
-                }
-
-                # Stop pipeline on stage failure unless configured to continue
-                if not stage_success:
-                    if not self.config.continue_on_error:
-                        results["success"] = False
-                        break
-                    else:
-                        stage.status = StageStatus.SKIPPED
-                        context.add_warning(
-                            f"Stage {stage.name} failed but continuing", stage.name
-                        )
-
-            # Final result compilation
-            results["errors"] = context.errors
-            results["warnings"] = context.warnings
-            results["performance"] = {
-                "total_duration": context.get_total_duration(),
-                "stage_timings": context.stage_timings,
-                "bottleneck_stage": self._identify_bottleneck(context.stage_timings),
-            }
-
-            success_msg = (
-                "Pipeline completed successfully"
-                if results["success"]
-                else "Pipeline completed with errors"
-            )
-            self.logger.info(
-                f"{success_msg} in {results['performance']['total_duration']:.2f}s"
-            )
-
-        except Exception as e:
-            self.logger.error(f"Pipeline execution failed: {e}", exc_info=True)
-            results["success"] = False
-            results["errors"].append(f"Pipeline execution error: {str(e)}")
-
-        return results
-
-    async def _execute_stage_with_monitoring(
-        self, stage: PipelineStage, context: PipelineContext
-    ) -> bool:
-        """Execute a single stage with comprehensive monitoring.
-
-        Args:
-            stage: Stage to execute
-            context: Pipeline context
-
-        Returns:
-            True if stage succeeded, False otherwise
-        """
-        try:
-            # Validate prerequisites
-            if not await stage.validate_prerequisites(context):
-                context.add_error("Prerequisites not met for stage", stage.name)
-                return False
-
-            stage._start_execution()
-
-            # Execute with timeout if configured
-            if self.config.timeout_seconds > 0:
-                success = await asyncio.wait_for(
-                    stage.execute(context), timeout=self.config.timeout_seconds
+            if parallelizable_stages and len(parallelizable_stages) > 1:
+                await self._execute_with_parallel_optimization(
+                    context, execution_summary
                 )
             else:
-                success = await stage.execute(context)
+                await self._execute_sequential_optimized(context, execution_summary)
 
-            stage._end_execution(success)
+        except Exception as e:
+            execution_summary["success"] = False
+            execution_summary["errors"].append(str(e))
+            self.logger.error(f"Pipeline execution failed: {e}", exc_info=True)
+            return False
+        finally:
+            # Finalize execution summary
+            execution_summary["total_execution_time"] = (
+                time.time() - pipeline_start_time
+            )
+            execution_summary["performance_metrics"] = (
+                self.performance_manager.get_performance_report()
+            )
+            self.execution_history.append(execution_summary)
 
-            # Record timing
-            if stage.get_duration() is not None:
-                context.record_stage_timing(stage.name, stage.get_duration())
+            # Log performance summary
+            self._log_execution_summary(execution_summary)
+
+        return execution_summary["success"]
+
+    async def _execute_sequential_optimized(
+        self, context: PipelineContext, execution_summary: Dict[str, Any]
+    ) -> None:
+        """Execute stages sequentially with optimization."""
+
+        for i, stage in enumerate(self.stages):
+            stage_start_time = time.time()
+
+            try:
+                # Check prerequisites
+                if not await stage.validate_prerequisites(context):
+                    error_msg = f"Stage {stage.name} prerequisites not met"
+                    context.add_error(error_msg, "pipeline")
+                    execution_summary["errors"].append(error_msg)
+                    execution_summary["success"] = False
+                    break
+
+                # Execute stage with performance optimization
+                success = await self.performance_manager.execute_optimized_stage(
+                    stage_name=stage.name,
+                    stage_func=self._execute_stage_wrapper,
+                    stage_args=(stage, context),
+                    stage_kwargs={},
+                    enable_caching=self._is_stage_cacheable(stage),
+                )
+
+                if not success:
+                    execution_summary["success"] = False
+                    execution_summary["errors"].extend(context.errors)
+                    break
+
+                # Track successful execution
+                stage_metrics = {
+                    "stage_name": stage.name,
+                    "execution_time": time.time() - stage_start_time,
+                    "success": True,
+                    "stage_index": i,
+                }
+                execution_summary["stages_executed"].append(stage_metrics)
+
+            except Exception as e:
+                stage_metrics = {
+                    "stage_name": stage.name,
+                    "execution_time": time.time() - stage_start_time,
+                    "success": False,
+                    "error": str(e),
+                    "stage_index": i,
+                }
+                execution_summary["stages_executed"].append(stage_metrics)
+                execution_summary["errors"].append(str(e))
+                execution_summary["success"] = False
+                break
+
+    async def _execute_with_parallel_optimization(
+        self, context: PipelineContext, execution_summary: Dict[str, Any]
+    ) -> None:
+        """Execute pipeline with parallel processing for independent stages."""
+
+        # Group stages by dependencies
+        stage_groups = self._group_stages_by_dependencies()
+
+        for group_index, stage_group in enumerate(stage_groups):
+            if len(stage_group) == 1:
+                # Single stage - execute normally
+                stage = stage_group[0]
+                success = await self._execute_single_stage_optimized(stage, context)
+                if not success:
+                    execution_summary["success"] = False
+                    break
+            else:
+                # Multiple independent stages - execute in parallel
+                success = await self._execute_parallel_stage_group(stage_group, context)
+                if not success:
+                    execution_summary["success"] = False
+                    break
+
+    async def _execute_single_stage_optimized(
+        self, stage: PipelineStage, context: PipelineContext
+    ) -> bool:
+        """Execute a single stage with optimization."""
+
+        # Check prerequisites
+        if not await stage.validate_prerequisites(context):
+            context.add_error(f"Stage {stage.name} prerequisites not met", "pipeline")
+            return False
+
+        # Execute with performance monitoring
+        return await self.performance_manager.execute_optimized_stage(
+            stage_name=stage.name,
+            stage_func=self._execute_stage_wrapper,
+            stage_args=(stage, context),
+            stage_kwargs={},
+            enable_caching=self._is_stage_cacheable(stage),
+        )
+
+    async def _execute_parallel_stage_group(
+        self, stage_group: List[PipelineStage], context: PipelineContext
+    ) -> bool:
+        """Execute a group of independent stages in parallel."""
+
+        self.logger.info(f"Executing {len(stage_group)} stages in parallel")
+
+        # Prepare stage functions and contexts
+        stage_functions = []
+        stage_contexts = []
+
+        for stage in stage_group:
+            # Create separate context for each parallel stage
+            stage_context = PipelineContext(
+                input_data=context.input_data.copy(),
+                processed_data=context.processed_data.copy(),
+                metadata=context.metadata.copy(),
+                stage_results=context.stage_results.copy(),
+            )
+
+            stage_functions.append(
+                lambda s=stage, sc=stage_context: self._execute_stage_sync(s, sc)
+            )
+            stage_contexts.append(stage_context)
+
+        # Execute in parallel
+        try:
+            results = await self.performance_manager.parallel_processor.execute_parallel_stages(
+                stage_functions=stage_functions,
+                stage_contexts=stage_contexts,
+                timeout=30.0,
+            )
+
+            # Merge results back to main context
+            success = True
+            for i, result in enumerate(results):
+                if result is None or (isinstance(result, bool) and not result):
+                    success = False
+                    self.logger.error(f"Parallel stage {stage_group[i].name} failed")
+                else:
+                    # Merge successful stage results
+                    stage_context = stage_contexts[i]
+                    context.stage_results.update(stage_context.stage_results)
+                    context.processed_data.update(stage_context.processed_data)
+                    context.errors.extend(stage_context.errors)
 
             return success
 
-        except asyncio.TimeoutError:
-            stage._end_execution(False)
-            error_msg = f"Stage timed out after {self.config.timeout_seconds}s"
-            context.add_error(error_msg, stage.name)
+        except Exception as e:
+            self.logger.error(f"Parallel execution failed: {e}")
             return False
 
+    def _execute_stage_sync(
+        self, stage: PipelineStage, context: PipelineContext
+    ) -> bool:
+        """Synchronous wrapper for stage execution (for parallel processing)."""
+        try:
+            loop = asyncio.new_event_loop()
+            asyncio.set_event_loop(loop)
+            return loop.run_until_complete(stage.execute(context))
+        finally:
+            loop.close()
+
+    async def _execute_stage_wrapper(
+        self, stage: PipelineStage, context: PipelineContext
+    ) -> bool:
+        """Wrapper for stage execution with additional monitoring."""
+        try:
+            return await stage.execute(context)
         except Exception as e:
-            stage._end_execution(False)
-            error_msg = f"Stage execution failed: {str(e)}"
-            context.add_error(error_msg, stage.name)
+            context.add_error(
+                f"Stage {stage.name} execution failed: {str(e)}", stage.name
+            )
             self.logger.error(f"Stage {stage.name} failed: {e}", exc_info=True)
             return False
 
-        finally:
-            # Always attempt cleanup
+    def _identify_parallelizable_stages(self) -> List[PipelineStage]:
+        """Identify stages that can be executed in parallel."""
+        # For now, identify stages with no dependencies or independent stages
+        # This is a simplified implementation - could be enhanced with dependency analysis
+
+        independent_stages = []
+        for stage in self.stages:
+            # Check if stage has specific parallel processing support
+            if hasattr(stage, "supports_parallel") and stage.supports_parallel:
+                independent_stages.append(stage)
+
+        return independent_stages
+
+    def _group_stages_by_dependencies(self) -> List[List[PipelineStage]]:
+        """Group stages by their dependencies for parallel execution."""
+        # Simplified grouping - stages with no dependencies can run in parallel
+        # More sophisticated dependency analysis could be implemented
+
+        groups = []
+        current_group = []
+
+        for stage in self.stages:
+            # Check if stage depends on results from previous stages
+            if self._stage_has_dependencies(stage, current_group):
+                # Start new group
+                if current_group:
+                    groups.append(current_group)
+                current_group = [stage]
+            else:
+                # Add to current group
+                current_group.append(stage)
+
+        if current_group:
+            groups.append(current_group)
+
+        return groups
+
+    def _stage_has_dependencies(
+        self, stage: PipelineStage, previous_stages: List[PipelineStage]
+    ) -> bool:
+        """Check if a stage has dependencies on previous stages."""
+        # Simple implementation - could be enhanced with formal dependency tracking
+        return hasattr(stage, "dependencies") and stage.dependencies
+
+    def _is_stage_cacheable(self, stage: PipelineStage) -> bool:
+        """Determine if a stage's results can be cached."""
+        # Stages that are deterministic and don't depend on external state
+        cacheable_stage_types = [
+            "ColumnClassificationStage",
+            "HEDMappingStage",
+            "SidecarGenerationStage",
+        ]
+
+        return type(stage).__name__ in cacheable_stage_types
+
+    def _log_execution_summary(self, execution_summary: Dict[str, Any]) -> None:
+        """Log pipeline execution summary."""
+        total_time = execution_summary["total_execution_time"]
+        success = execution_summary["success"]
+        stages_count = len(execution_summary["stages_executed"])
+
+        if success:
+            self.logger.info(
+                f"Pipeline completed successfully: {total_time:.2f}s, "
+                f"{stages_count}/{execution_summary['total_stages']} stages executed"
+            )
+
+            # Check performance target
+            if total_time > 10.0:
+                self.logger.warning(
+                    f"Pipeline execution time ({total_time:.2f}s) exceeds 10s target"
+                )
+        else:
+            self.logger.error(
+                f"Pipeline failed after {total_time:.2f}s, "
+                f"errors: {len(execution_summary['errors'])}"
+            )
+
+    def get_performance_report(self) -> Dict[str, Any]:
+        """Get comprehensive performance report."""
+        return self.performance_manager.get_performance_report()
+
+    def get_execution_history(self) -> List[Dict[str, Any]]:
+        """Get pipeline execution history."""
+        return self.execution_history
+
+    def clear_cache(self) -> None:
+        """Clear performance caches."""
+        self.performance_manager.cache.clear()
+        self.logger.info("Pipeline caches cleared")
+
+    async def cleanup(self, context: PipelineContext) -> None:
+        """Clean up pipeline resources."""
+        for stage in self.stages:
             try:
                 await stage.cleanup(context)
-            except Exception as cleanup_error:
-                self.logger.warning(
-                    f"Stage {stage.name} cleanup failed: {cleanup_error}"
-                )
+            except Exception as e:
+                self.logger.warning(f"Stage {stage.name} cleanup failed: {e}")
 
-    def _identify_bottleneck(self, stage_timings: Dict[str, float]) -> Optional[str]:
-        """Identify the slowest stage in the pipeline.
-
-        Args:
-            stage_timings: Dictionary of stage names to durations
-
-        Returns:
-            Name of the slowest stage, or None if no timings available
-        """
-        if not stage_timings:
-            return None
-
-        return max(stage_timings.items(), key=lambda x: x[1])[0]
-
-    def get_stage_count(self) -> int:
-        """Get the number of stages in the pipeline."""
-        return len(self.stages)
-
-    def get_stage_names(self) -> List[str]:
-        """Get the names of all stages in execution order."""
-        return [stage.name for stage in self.stages]
+        # Generate final performance report
+        final_report = self.get_performance_report()
+        self.logger.info(
+            f"Pipeline cleanup completed. Final performance score: {final_report.get('performance_summary', {}).get('performance_score', 0):.1f}%"
+        )
