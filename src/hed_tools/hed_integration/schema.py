@@ -7,7 +7,7 @@ in a consistent manner, abstracting the complexity of the underlying hed.schema 
 import asyncio
 import logging
 import time
-from typing import Optional, Dict, Any, List, Set, Union, Tuple
+from typing import Optional, Dict, Any, List, Set, Tuple
 from pathlib import Path
 from concurrent.futures import ThreadPoolExecutor
 
@@ -357,7 +357,7 @@ class SchemaHandler:
             return []
     
     def find_similar_tags(self, partial_tag: str, version: Optional[str] = None, 
-                         max_results: int = 10) -> List[str]:
+                          max_results: int = 10) -> List[str]:
         """Find tags similar to a partial tag string.
         
         Args:
@@ -375,7 +375,7 @@ class SchemaHandler:
             # Find exact matches first, then partial matches
             exact_matches = [tag for tag in all_tags if tag.lower() == partial_lower]
             partial_matches = [tag for tag in all_tags 
-                             if partial_lower in tag.lower() and tag not in exact_matches]
+                              if partial_lower in tag.lower() and tag not in exact_matches]
             
             # Combine and limit results
             results = exact_matches + partial_matches
@@ -605,7 +605,6 @@ class SchemaHandler:
         if result.success and result.data:
             results = {}
             loaded_schemas = result.data.get("loaded_schemas", [])
-            failed_schemas = result.data.get("failed_schemas", {})
             
             for version in versions:
                 results[version] = version in loaded_schemas

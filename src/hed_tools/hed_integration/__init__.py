@@ -6,6 +6,11 @@ including wrappers and utilities for HED schema handling and validation.
 
 from .hed_wrapper import HEDWrapper, create_hed_wrapper, HEDIntegration
 from .schema import SchemaHandler, SchemaManagerFacade
+from .tabular_summary import (
+    TabularSummaryWrapper, create_tabular_summary_wrapper,
+    DataValidator, MemoryManager, CacheManager, 
+    ValidationError, DataFormat, PerformanceMetrics
+)
 from .models import (
     # Configuration models
     HEDWrapperConfig, SchemaConfig, ValidationConfig, TabularSummaryConfig,
@@ -25,6 +30,16 @@ __all__ = [
     # Schema handling
     'SchemaHandler',
     'SchemaManagerFacade',
+    
+    # TabularSummary integration
+    'TabularSummaryWrapper',
+    'create_tabular_summary_wrapper',
+    'DataValidator',
+    'MemoryManager',
+    'CacheManager',
+    'ValidationError',
+    'DataFormat',
+    'PerformanceMetrics',
     
     # Configuration models
     'HEDWrapperConfig',

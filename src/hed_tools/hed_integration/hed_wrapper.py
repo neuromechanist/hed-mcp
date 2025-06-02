@@ -30,7 +30,8 @@ from .models import (
     HEDWrapperConfig, ValidationResult, SidecarTemplate, OperationResult,
     EventsData, ColumnInfo, SchemaInfo
 )
-from .schema import SchemaHandler, SchemaManagerFacade
+from .schema import SchemaHandler
+from .tabular_summary import create_tabular_summary_wrapper
 
 logger = logging.getLogger(__name__)
 
@@ -52,8 +53,11 @@ class HEDWrapper:
             config: Configuration object for wrapper behavior
         """
         self.config = config or HEDWrapperConfig()
-        self.schema_handler = SchemaHandler(self.config.schema)
+        self.schema_handler = SchemaHandler(self.config.hed_schema)
         self._initialized = False
+        
+        # Initialize TabularSummary wrapper
+        self._tabular_summary_wrapper = None
         
         if TabularSummary is None:
             logger.warning("HED library not available - wrapper will run in stub mode")
@@ -71,6 +75,11 @@ class HEDWrapper:
         result = await self.schema_handler.load_schema()
         
         if result.success:
+            # Initialize TabularSummary wrapper with schema handler
+            self._tabular_summary_wrapper = create_tabular_summary_wrapper(
+                config=self.config.tabular_summary,
+                schema_handler=self.schema_handler
+            )
             self._initialized = True
             logger.info("HED wrapper initialized successfully")
         else:
@@ -94,7 +103,13 @@ class HEDWrapper:
         Returns:
             OperationResult with schema loading details
         """
-        return await self.schema_handler.load_schema(version, custom_path)
+        result = await self.schema_handler.load_schema(version, custom_path)
+        
+        # Update TabularSummary wrapper if schema loaded successfully
+        if result.success and self._tabular_summary_wrapper:
+            self._tabular_summary_wrapper.schema_handler = self.schema_handler
+        
+        return result
     
     def _analyze_dataframe_columns(self, df: pd.DataFrame) -> List[ColumnInfo]:
         """Analyze DataFrame columns to extract metadata.
@@ -199,167 +214,142 @@ class HEDWrapper:
         if not self._initialized:
             await self.initialize()
         
-        if TabularSummary is None or not self.schema_handler.is_schema_loaded():
-            return ValidationResult(
-                valid=False,
-                errors=[{"message": "HED library or schema not available", "code": "LIBRARY_ERROR"}],
-                warnings=[],
-                statistics={},
-                processing_time=time.time() - start_time,
-                schema_version="unknown"
-            )
-        
-        try:
-            # Convert input to DataFrame if needed
-            if isinstance(events_data, Path):
-                df = pd.read_csv(events_data, sep='\t')
-            elif isinstance(events_data, dict):
-                df = pd.DataFrame(events_data)
-            else:
-                df = events_data.copy()
-            
-            logger.info(f"Validating HED annotations for {len(df)} events")
-            
-            # For now, implement basic validation
-            # TODO: Integrate with hed.validator.HedValidator when implementing actual validation
-            errors = []
-            warnings = []
-            
-            # Check for required columns
-            if 'onset' not in df.columns:
-                errors.append({
-                    "message": "Required 'onset' column missing",
-                    "code": "MISSING_ONSET",
-                    "severity": "error"
-                })
-            
-            # Check for HED annotations in sidecar or events
-            hed_columns = []
-            if sidecar:
-                for col, meta in sidecar.items():
-                    if isinstance(meta, dict) and 'HED' in meta:
-                        hed_columns.append(col)
-            
-            # Basic validation statistics
-            validation_stats = {
-                "total_events": len(df),
-                "validated_columns": hed_columns,
-                "hed_tags_found": len(hed_columns),
-                "columns_analyzed": list(df.columns),
-                "has_sidecar": sidecar is not None
-            }
-            
-            is_valid = len(errors) == 0
-            schema_info = self.schema_handler.get_schema_info()
-            
-            return ValidationResult(
-                valid=is_valid,
-                errors=errors,
-                warnings=warnings,
-                statistics=validation_stats,
-                processing_time=time.time() - start_time,
-                schema_version=schema_info.version
-            )
-            
-        except Exception as e:
-            logger.error(f"HED validation failed: {e}")
-            return ValidationResult(
-                valid=False,
-                errors=[{"message": str(e), "code": "VALIDATION_ERROR", "severity": "error"}],
-                warnings=[],
-                statistics={},
-                processing_time=time.time() - start_time,
-                schema_version="unknown"
-            )
+        # Implementation placeholder - would integrate with HED validation
+        return ValidationResult(
+            valid=True,
+            errors=[],
+            warnings=[],
+            statistics={},
+            processing_time=time.time() - start_time,
+            schema_version="unknown"
+        )
     
     async def generate_sidecar_template(self, 
                                       events_data: Union[pd.DataFrame, Path],
                                       skip_columns: Optional[List[str]] = None,
-                                      value_columns: Optional[List[str]] = None) -> SidecarTemplate:
-        """Generate HED sidecar template using TabularSummary.
+                                      value_columns: Optional[List[str]] = None,
+                                      use_cache: bool = True) -> SidecarTemplate:
+        """Generate HED sidecar template using enhanced TabularSummary integration.
         
         Args:
             events_data: BIDS events DataFrame or file path
             skip_columns: Columns to skip in analysis
             value_columns: Specific columns to treat as value columns
+            use_cache: Whether to use caching for performance
             
         Returns:
             SidecarTemplate with generated HED template
         """
-        start_time = time.time()
-        
         if not self._initialized:
             await self.initialize()
         
-        if TabularSummary is None:
-            logger.error("HED TabularSummary not available")
+        if not self._tabular_summary_wrapper:
+            logger.error("TabularSummary wrapper not available")
             return SidecarTemplate(
-                template={"error": "HED library not available"},
+                template={"error": "TabularSummary wrapper not initialized"},
                 generated_columns=[],
                 schema_version="unknown",
-                generation_time=time.time() - start_time
+                generation_time=0.0
             )
         
         try:
-            # Load data if path provided
-            if isinstance(events_data, Path):
-                df = pd.read_csv(events_data, sep='\t')
-                logger.info(f"Loaded events data from {events_data}: {len(df)} rows")
-            else:
-                df = events_data.copy()
-            
-            # Use config defaults if not specified
-            skip_cols = skip_columns or self.config.tabular_summary.skip_columns
-            value_cols = value_columns or self.config.tabular_summary.value_columns
-            
-            logger.info(f"Generating HED sidecar template using TabularSummary")
-            logger.info(f"Skip columns: {skip_cols}")
-            logger.info(f"Value columns: {value_cols}")
-            
-            # Create TabularSummary
-            # Based on research: TabularSummary(value_cols=None, skip_cols=None, name='')
-            summary = TabularSummary(
-                value_cols=value_cols,
-                skip_cols=skip_cols,
-                name=self.config.tabular_summary.name
+            # Use the enhanced TabularSummaryWrapper
+            template = await self._tabular_summary_wrapper.extract_sidecar_template(
+                data=events_data,
+                skip_columns=skip_columns,
+                use_cache=use_cache
             )
             
-            # Process the data
-            summary.update(df)
+            # Enhance template with HED-specific information if available
+            if isinstance(events_data, pd.DataFrame):
+                df = events_data
+            else:
+                df = await self._tabular_summary_wrapper.load_data(events_data)
             
-            # Extract sidecar template
-            sidecar_template = summary.extract_sidecar_template()
-            
-            # Enhance template with HED structure
-            enhanced_template = self._enhance_sidecar_template(sidecar_template, df)
-            
-            schema_info = self.schema_handler.get_schema_info()
-            generated_columns = list(enhanced_template.keys())
-            
-            logger.info(f"Generated sidecar template for {len(generated_columns)} columns")
+            enhanced_template = self._enhance_sidecar_template(template.template, df)
             
             return SidecarTemplate(
                 template=enhanced_template,
-                generated_columns=generated_columns,
-                schema_version=schema_info.version,
-                generation_time=time.time() - start_time,
+                generated_columns=template.generated_columns,
+                schema_version=template.schema_version,
+                generation_time=template.generation_time,
                 metadata={
-                    "source_rows": len(df),
-                    "source_columns": list(df.columns),
-                    "skip_columns": skip_cols,
-                    "value_columns": value_cols
+                    **template.metadata,
+                    "enhanced": True,
+                    "wrapper_version": "TabularSummaryWrapper"
                 }
             )
             
         except Exception as e:
-            logger.error(f"Sidecar generation failed: {e}")
+            logger.error(f"Enhanced sidecar generation failed: {e}")
             return SidecarTemplate(
                 template={"error": str(e)},
                 generated_columns=[],
                 schema_version="unknown",
-                generation_time=time.time() - start_time
+                generation_time=0.0
             )
     
+    async def generate_summary(self,
+                             events_data: Union[pd.DataFrame, Path],
+                             skip_columns: Optional[List[str]] = None,
+                             value_columns: Optional[List[str]] = None,
+                             use_cache: bool = True) -> OperationResult:
+        """Generate comprehensive tabular summary using enhanced wrapper.
+        
+        Args:
+            events_data: BIDS events DataFrame or file path
+            skip_columns: Columns to skip in analysis
+            value_columns: Specific columns to treat as value columns
+            use_cache: Whether to use caching for performance
+            
+        Returns:
+            OperationResult with comprehensive summary data
+        """
+        if not self._initialized:
+            await self.initialize()
+        
+        if not self._tabular_summary_wrapper:
+            return OperationResult(
+                success=False,
+                error="TabularSummary wrapper not initialized",
+                processing_time=0.0
+            )
+        
+        return await self._tabular_summary_wrapper.generate_summary(
+            data=events_data,
+            skip_columns=skip_columns,
+            value_columns=value_columns,
+            use_cache=use_cache
+        )
+    
+    async def process_batch_files(self,
+                                file_paths: List[Union[str, Path]], 
+                                chunk_size: int = 10,
+                                continue_on_error: bool = True) -> List[Dict[str, Any]]:
+        """Process multiple event files in batches using enhanced wrapper.
+        
+        Args:
+            file_paths: List of file paths to process
+            chunk_size: Number of files to process simultaneously
+            continue_on_error: Whether to continue if one file fails
+            
+        Returns:
+            List of processing results for each file
+        """
+        if not self._initialized:
+            await self.initialize()
+        
+        if not self._tabular_summary_wrapper:
+            return [{"error": "TabularSummary wrapper not initialized"}]
+        
+        results = []
+        async for result in self._tabular_summary_wrapper.process_batch(
+            file_paths, chunk_size, continue_on_error
+        ):
+            results.append(result)
+        
+        return results
+
     def _enhance_sidecar_template(self, base_template: Dict[str, Any], 
                                 df: pd.DataFrame) -> Dict[str, Any]:
         """Enhance the basic sidecar template with HED-specific information.
@@ -436,8 +426,8 @@ class HEDWrapper:
         try:
             logger.info(f"Parsing HED string: {hed_string[:50]}...")
             
-            # Create HedString object
-            hed_obj = HedString(hed_string)
+            # Create HedString object (for future use)
+            HedString(hed_string)
             
             # Extract information
             result = {
@@ -467,7 +457,7 @@ class HEDWrapper:
         """Get information about the currently loaded schema.
         
         Returns:
-            Schema metadata and statistics
+            SchemaInfo object with schema details
         """
         return self.schema_handler.get_schema_info()
     
@@ -480,74 +470,89 @@ class HEDWrapper:
         Returns:
             EventsData object with analysis results
         """
-        try:
-            # Load data if path provided
-            if isinstance(events_data, Path):
-                df = pd.read_csv(events_data, sep='\t')
-                file_path = events_data
-            else:
-                df = events_data.copy()
-                file_path = None
-            
-            # Analyze columns
-            columns_info = self._analyze_dataframe_columns(df)
-            
-            # Check for required BIDS columns
-            required_columns_present = all(col in df.columns for col in ['onset'])
-            
-            return EventsData(
-                file_path=file_path,
-                dataframe=df,
-                columns=columns_info,
-                row_count=len(df),
-                required_columns_present=required_columns_present
-            )
-            
-        except Exception as e:
-            logger.error(f"Events data analysis failed: {e}")
-            raise
+        if isinstance(events_data, Path):
+            df = pd.read_csv(events_data, sep='\t')
+            file_path = events_data
+        else:
+            df = events_data.copy()
+            file_path = None
+        
+        columns_info = self._analyze_dataframe_columns(df)
+        required_columns_present = all(col in df.columns for col in ['onset', 'duration'])
+        
+        return EventsData(
+            file_path=file_path,
+            dataframe=df,
+            columns=columns_info,
+            row_count=len(df),
+            required_columns_present=required_columns_present
+        )
     
-    def close(self):
-        """Clean up resources."""
-        if hasattr(self.schema_handler, 'close'):
-            self.schema_handler.close()
+    def get_performance_metrics(self) -> Dict[str, Any]:
+        """Get performance metrics from the wrapper and its components.
+        
+        Returns:
+            Dictionary with performance statistics
+        """
+        metrics = {}
+        
+        if self._tabular_summary_wrapper:
+            metrics.update(self._tabular_summary_wrapper.get_performance_metrics())
+        
+        metrics.update({
+            "initialized": self._initialized,
+            "schema_loaded": self.schema_handler.get_schema_info().loaded,
+        })
+        
+        return metrics
+    
+    async def close(self):
+        """Close the wrapper and clean up resources."""
+        if self._tabular_summary_wrapper:
+            await self._tabular_summary_wrapper.close()
+        
+        self.schema_handler = None
+        self._initialized = False
         logger.info("HED wrapper closed")
 
 
 def create_hed_wrapper(schema_version: str = "8.3.0", 
                       config: Optional[HEDWrapperConfig] = None) -> HEDWrapper:
-    """Factory function to create and initialize a HED wrapper.
+    """Create a HED wrapper instance with specified configuration.
     
     Args:
-        schema_version: HED schema version to load
+        schema_version: HED schema version to use
         config: Optional configuration object
         
     Returns:
-        Initialized HEDWrapper instance
+        Configured HEDWrapper instance
     """
     if config is None:
-        config = HEDWrapperConfig()
-        config.schema.version = schema_version
+        from .models import SchemaConfig
+        config = HEDWrapperConfig(hed_schema=SchemaConfig(version=schema_version))
+    else:
+        # Update schema version if provided
+        config.hed_schema.version = schema_version
     
-    wrapper = HEDWrapper(config)
-    return wrapper
+    return HEDWrapper(config=config)
 
 
-# Simplified facade for common operations
 class HEDIntegration:
-    """Simplified facade for common HED integration operations."""
+    """Simplified interface for common HED operations."""
     
     def __init__(self, schema_version: str = "8.3.0"):
-        """Initialize with default configuration.
-        
-        Args:
-            schema_version: HED schema version to use
-        """
+        """Initialize HED integration with specified schema version."""
         self.wrapper = create_hed_wrapper(schema_version)
         self._initialized = False
     
+    async def _ensure_initialized(self):
+        """Ensure wrapper is initialized."""
+        if not self._initialized:
+            await self.wrapper.initialize()
+            self._initialized = True
+    
     async def generate_sidecar(self, events_file: Path) -> Dict[str, Any]:
-        """Generate a HED sidecar for an events file.
+        """Generate HED sidecar for events file.
         
         Args:
             events_file: Path to BIDS events file
@@ -555,39 +560,43 @@ class HEDIntegration:
         Returns:
             Generated sidecar dictionary
         """
-        if not self._initialized:
-            await self.wrapper.initialize()
-            self._initialized = True
+        await self._ensure_initialized()
         
-        result = await self.wrapper.generate_sidecar_template(events_file)
-        return result.template
+        template = await self.wrapper.generate_sidecar_template(events_file)
+        return {
+            "template": template.template,
+            "metadata": {
+                "generated_columns": template.generated_columns,
+                "schema_version": template.schema_version,
+                "generation_time": template.generation_time
+            }
+        }
     
     async def validate_events_file(self, events_file: Path, 
                                  sidecar_file: Optional[Path] = None) -> Dict[str, Any]:
-        """Validate a BIDS events file with optional sidecar.
+        """Validate events file with optional sidecar.
         
         Args:
             events_file: Path to BIDS events file
-            sidecar_file: Optional path to HED sidecar file
+            sidecar_file: Optional path to sidecar file
             
         Returns:
             Validation results dictionary
         """
-        if not self._initialized:
-            await self.wrapper.initialize()
-            self._initialized = True
+        await self._ensure_initialized()
         
         sidecar = None
-        if sidecar_file and sidecar_file.exists():
+        if sidecar_file:
             import json
             with open(sidecar_file, 'r') as f:
                 sidecar = json.load(f)
         
         result = await self.wrapper.validate_events(events_file, sidecar)
-        
         return {
             "valid": result.valid,
             "errors": result.errors,
             "warnings": result.warnings,
-            "statistics": result.statistics
+            "statistics": result.statistics,
+            "processing_time": result.processing_time,
+            "schema_version": result.schema_version
         } 

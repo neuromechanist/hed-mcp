@@ -5,9 +5,7 @@ validating, and working with HED schemas.
 """
 
 import pytest
-import asyncio
-from pathlib import Path
-from unittest.mock import Mock, patch, AsyncMock
+from unittest.mock import Mock, patch
 
 from src.hed_tools.hed_integration.schema import (
     SchemaHandler, 
@@ -17,7 +15,7 @@ from src.hed_tools.hed_integration.schema import (
     validate_hed_tag_simple,
     get_schema_version_info
 )
-from src.hed_tools.hed_integration.models import SchemaConfig, SchemaInfo
+from src.hed_tools.hed_integration.models import SchemaConfig
 
 
 class TestSchemaHandler:

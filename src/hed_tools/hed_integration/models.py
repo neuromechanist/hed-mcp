@@ -6,7 +6,7 @@ and API interfaces used throughout the HED integration system.
 
 from typing import Optional, Dict, Any, List
 from pathlib import Path
-from pydantic import BaseModel, Field, validator, root_validator
+from pydantic import BaseModel, Field, field_validator, model_validator, ConfigDict
 import pandas as pd
 
 
@@ -25,14 +25,16 @@ class SchemaConfig(BaseModel):
         description="Fallback versions if primary fails"
     )
     
-    @validator('version')
+    @field_validator('version')
+    @classmethod
     def validate_version(cls, v):
         """Validate schema version format."""
         if not v or not isinstance(v, str):
             raise ValueError("Schema version must be a non-empty string")
         return v
     
-    @validator('cache_dir')
+    @field_validator('cache_dir')
+    @classmethod
     def validate_cache_dir(cls, v):
         """Ensure cache directory exists or can be created."""
         if isinstance(v, str):
@@ -50,7 +52,8 @@ class ValidationConfig(BaseModel):
     max_errors: int = Field(default=100, description="Maximum errors to report")
     timeout_seconds: int = Field(default=60, description="Validation timeout")
     
-    @validator('max_errors')
+    @field_validator('max_errors')
+    @classmethod
     def validate_max_errors(cls, v):
         """Ensure max_errors is positive."""
         if v <= 0:
@@ -73,7 +76,8 @@ class TabularSummaryConfig(BaseModel):
     include_description: bool = Field(default=True, description="Include descriptions in output")
     max_unique_values: int = Field(default=50, description="Maximum unique values to include")
     
-    @validator('max_unique_values')
+    @field_validator('max_unique_values')
+    @classmethod
     def validate_max_unique_values(cls, v):
         """Ensure max_unique_values is reasonable."""
         if v <= 0 or v > 1000:
@@ -84,15 +88,13 @@ class TabularSummaryConfig(BaseModel):
 class HEDWrapperConfig(BaseModel):
     """Master configuration for HED wrapper operations."""
     
-    schema: SchemaConfig = Field(default_factory=SchemaConfig)
+    model_config = ConfigDict(arbitrary_types_allowed=True)
+    
+    hed_schema: SchemaConfig = Field(default_factory=SchemaConfig, alias='schema')
     validation: ValidationConfig = Field(default_factory=ValidationConfig)
     tabular_summary: TabularSummaryConfig = Field(default_factory=TabularSummaryConfig)
     async_timeout: float = Field(default=30.0, description="Default timeout for async operations")
     debug_mode: bool = Field(default=False, description="Enable debug logging")
-    
-    class Config:
-        """Pydantic model configuration."""
-        arbitrary_types_allowed = True
 
 
 class ColumnInfo(BaseModel):
@@ -111,7 +113,8 @@ class ColumnInfo(BaseModel):
         description="Suggested HED category"
     )
     
-    @validator('unique_count', 'null_count')
+    @field_validator('unique_count', 'null_count')
+    @classmethod
     def validate_counts(cls, v):
         """Ensure counts are non-negative."""
         if v < 0:
@@ -122,28 +125,23 @@ class ColumnInfo(BaseModel):
 class EventsData(BaseModel):
     """Model for BIDS events data."""
     
+    model_config = ConfigDict(arbitrary_types_allowed=True)
+    
     file_path: Optional[Path] = Field(default=None, description="Path to events file")
     dataframe: Optional[pd.DataFrame] = Field(default=None, description="Events DataFrame")
     columns: List[ColumnInfo] = Field(default_factory=list, description="Column information")
     row_count: int = Field(description="Number of rows in the data")
     required_columns_present: bool = Field(description="Whether onset/duration are present")
     
-    class Config:
-        """Pydantic model configuration."""
-        arbitrary_types_allowed = True
-    
-    @root_validator
-    def validate_data_source(cls, values):
+    @model_validator(mode='after')
+    def validate_data_source(self):
         """Ensure either file_path or dataframe is provided."""
-        file_path = values.get('file_path')
-        dataframe = values.get('dataframe')
-        
-        if file_path is None and dataframe is None:
+        if self.file_path is None and self.dataframe is None:
             raise ValueError("Either file_path or dataframe must be provided")
-        
-        return values
+        return self
     
-    @validator('row_count')
+    @field_validator('row_count')
+    @classmethod
     def validate_row_count(cls, v):
         """Ensure row count is non-negative."""
         if v < 0:
@@ -161,7 +159,8 @@ class ValidationResult(BaseModel):
     processing_time: float = Field(description="Time taken for validation in seconds")
     schema_version: str = Field(description="HED schema version used")
     
-    @validator('processing_time')
+    @field_validator('processing_time')
+    @classmethod
     def validate_processing_time(cls, v):
         """Ensure processing time is non-negative."""
         if v < 0:
@@ -178,14 +177,16 @@ class SidecarTemplate(BaseModel):
     generation_time: float = Field(description="Time taken to generate template")
     metadata: Dict[str, Any] = Field(default_factory=dict, description="Additional metadata")
     
-    @validator('generation_time')
+    @field_validator('generation_time')
+    @classmethod
     def validate_generation_time(cls, v):
         """Ensure generation time is non-negative."""
         if v < 0:
             raise ValueError("Generation time must be non-negative")
         return v
     
-    @validator('template')
+    @field_validator('template')
+    @classmethod
     def validate_template_structure(cls, v):
         """Basic validation of template structure."""
         if not isinstance(v, dict):
@@ -206,7 +207,8 @@ class SchemaInfo(BaseModel):
         description="Associated library schemas"
     )
     
-    @validator('tag_count')
+    @field_validator('tag_count')
+    @classmethod
     def validate_tag_count(cls, v):
         """Ensure tag count is non-negative."""
         if v < 0:
@@ -223,25 +225,22 @@ class OperationResult(BaseModel):
     processing_time: float = Field(description="Time taken for operation")
     metadata: Dict[str, Any] = Field(default_factory=dict, description="Additional metadata")
     
-    @validator('processing_time')
+    @field_validator('processing_time')
+    @classmethod
     def validate_processing_time(cls, v):
         """Ensure processing time is non-negative."""
         if v < 0:
             raise ValueError("Processing time must be non-negative")
         return v
     
-    @root_validator
-    def validate_result_consistency(cls, values):
+    @model_validator(mode='after')
+    def validate_result_consistency(self):
         """Ensure success/error consistency."""
-        success = values.get('success')
-        error = values.get('error')
-        
-        if success and error:
+        if self.success and self.error:
             raise ValueError("Cannot have both success=True and an error message")
-        if not success and not error:
+        if not self.success and not self.error:
             raise ValueError("Failed operations must include an error message")
-        
-        return values
+        return self
 
 
 class BatchProcessingConfig(BaseModel):
@@ -253,14 +252,16 @@ class BatchProcessingConfig(BaseModel):
     continue_on_error: bool = Field(default=True, description="Continue processing if one item fails")
     timeout_per_item: float = Field(default=60.0, description="Timeout per item in batch")
     
-    @validator('max_workers')
+    @field_validator('max_workers')
+    @classmethod
     def validate_max_workers(cls, v):
         """Ensure reasonable number of workers."""
         if v <= 0 or v > 32:
             raise ValueError("max_workers must be between 1 and 32")
         return v
     
-    @validator('chunk_size')
+    @field_validator('chunk_size')
+    @classmethod
     def validate_chunk_size(cls, v):
         """Ensure reasonable chunk size."""
         if v <= 0 or v > 100000:

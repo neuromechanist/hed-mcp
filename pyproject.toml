@@ -108,6 +108,7 @@ markers = [
     "slow: marks tests as slow (deselected with -m 'not slow')",
     "integration: marks tests as integration tests",
     "unit: marks tests as unit tests",
+    "asyncio: marks tests as async tests",
 ]
 
 [tool.coverage.run]
