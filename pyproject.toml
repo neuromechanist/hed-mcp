@@ -1,7 +1,3 @@
-[build-system]
-requires = ["hatchling", "hatch-vcs"]
-build-backend = "hatchling.build"
-
 [project]
 name = "hed-mcp"
 dynamic = ["version"]
@@ -9,10 +5,10 @@ description = "A Model Context Protocol (MCP) server for HED (Hierarchical Event
 readme = "README.md"
 license = { file = "LICENSE" }
 authors = [
-    { name = "HED MCP Development Team", email = "hed.maintainers@gmail.com" },
+    { name = "Seyed Yahya Shirazi", email = "shirazi@ieee.org" },
 ]
 maintainers = [
-    { name = "HED MCP Development Team", email = "hed.maintainers@gmail.com" },
+    { name = "Seyed Yahya Shirazi", email = "shirazi@ieee.org" },
 ]
 keywords = [
     "hed",
