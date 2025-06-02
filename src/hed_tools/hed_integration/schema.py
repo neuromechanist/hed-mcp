@@ -7,7 +7,7 @@ in a consistent manner, abstracting the complexity of the underlying hed.schema 
 import asyncio
 import logging
 import time
-from typing import Optional, Dict, Any, List
+from typing import Optional, Dict, Any, List, Set, Union, Tuple
 from pathlib import Path
 from concurrent.futures import ThreadPoolExecutor
 
@@ -16,6 +16,7 @@ try:
     from hed.schema.hed_schema import HedSchema
     from hed.schema.hed_schema_group import HedSchemaGroup
     from hed.errors.exceptions import HedFileError, HedExceptions
+    from hed.models import HedString
 except ImportError:
     # Graceful fallback if hed is not available
     load_schema_version = None
@@ -24,10 +25,16 @@ except ImportError:
     HedSchemaGroup = None
     HedFileError = Exception
     HedExceptions = Exception
+    HedString = None
 
 from .models import SchemaConfig, SchemaInfo, OperationResult
 
 logger = logging.getLogger(__name__)
+
+
+class HEDSchemaError(Exception):
+    """Custom exception for HED schema-related errors."""
+    pass
 
 
 class SchemaHandler:
@@ -44,6 +51,7 @@ class SchemaHandler:
         self._schema_cache: Dict[str, HedSchema] = {}
         self._schema_info: Optional[SchemaInfo] = None
         self._executor = ThreadPoolExecutor(max_workers=2)
+        self._multiple_schemas: Dict[str, HedSchema] = {}
         
         if load_schema_version is None:
             logger.warning("HED library not available - schema handler will run in stub mode")
@@ -66,7 +74,7 @@ class SchemaHandler:
         if load_schema_version is None:
             return OperationResult(
                 success=False,
-                error="HED library not available",
+                error="HED library not available - please install hedtools package",
                 processing_time=time.time() - start_time
             )
         
@@ -115,32 +123,318 @@ class SchemaHandler:
                 processing_time=time.time() - start_time
             )
             
-        except Exception as e:
-            logger.error(f"Failed to load HED schema: {e}")
+        except HedFileError as e:
+            error_msg = f"Failed to load HED schema: {e}. Please check the schema version or file path."
+            logger.error(error_msg)
             return OperationResult(
                 success=False,
-                error=str(e),
+                error=error_msg,
+                processing_time=time.time() - start_time
+            )
+        except Exception as e:
+            error_msg = f"Unexpected error loading HED schema: {e}"
+            logger.error(error_msg)
+            return OperationResult(
+                success=False,
+                error=error_msg,
                 processing_time=time.time() - start_time
             )
     
+    async def load_multiple_schemas(self, versions: List[str]) -> OperationResult:
+        """Load multiple HED schema versions simultaneously.
+        
+        Args:
+            versions: List of HED schema versions to load
+            
+        Returns:
+            OperationResult with information about loaded schemas
+        """
+        start_time = time.time()
+        
+        if load_schema_version is None:
+            return OperationResult(
+                success=False,
+                error="HED library not available",
+                processing_time=time.time() - start_time
+            )
+        
+        try:
+            loaded_schemas = {}
+            failed_schemas = {}
+            
+            # Load schemas in parallel
+            loop = asyncio.get_event_loop()
+            tasks = []
+            
+            for version in versions:
+                task = loop.run_in_executor(
+                    self._executor,
+                    self._load_single_schema_version,
+                    version
+                )
+                tasks.append((version, task))
+            
+            for version, task in tasks:
+                try:
+                    schema = await task
+                    loaded_schemas[version] = schema
+                    self._multiple_schemas[version] = schema
+                    logger.info(f"Successfully loaded HED schema version: {version}")
+                except Exception as e:
+                    failed_schemas[version] = str(e)
+                    logger.warning(f"Failed to load HED schema version {version}: {e}")
+            
+            success = len(loaded_schemas) > 0
+            result_data = {
+                "loaded_schemas": list(loaded_schemas.keys()),
+                "failed_schemas": failed_schemas,
+                "total_requested": len(versions),
+                "total_loaded": len(loaded_schemas)
+            }
+            
+            return OperationResult(
+                success=success,
+                data=result_data,
+                error=None if success else "Failed to load any schemas",
+                processing_time=time.time() - start_time
+            )
+            
+        except Exception as e:
+            error_msg = f"Error during multiple schema loading: {e}"
+            logger.error(error_msg)
+            return OperationResult(
+                success=False,
+                error=error_msg,
+                processing_time=time.time() - start_time
+            )
+    
+    def _load_single_schema_version(self, version: str) -> HedSchema:
+        """Load a single schema version (blocking operation for thread pool)."""
+        try:
+            return load_schema_version(version)
+        except Exception as e:
+            raise HEDSchemaError(f"Failed to load schema version {version}: {e}")
+    
     def _load_schema_from_file(self, file_path: Path) -> HedSchema:
         """Load schema from file (blocking operation for thread pool)."""
-        return load_schema(str(file_path))
+        try:
+            if not file_path.exists():
+                raise HEDSchemaError(f"Schema file not found: {file_path}")
+            
+            return load_schema(str(file_path))
+        except Exception as e:
+            raise HEDSchemaError(f"Failed to load schema from {file_path}: {e}")
     
     def _load_schema_with_fallback(self, version: str) -> HedSchema:
         """Load schema with fallback versions (blocking operation for thread pool)."""
         versions_to_try = [version] + [v for v in self.config.fallback_versions if v != version]
         
+        last_error = None
         for ver in versions_to_try:
             try:
                 logger.info(f"Attempting to load HED schema version: {ver}")
                 return load_schema_version(ver)
             except Exception as e:
+                last_error = e
                 logger.warning(f"Failed to load schema version {ver}: {e}")
                 continue
         
-        raise HedFileError(f"Failed to load any schema versions: {versions_to_try}")
+        raise HEDSchemaError(f"Failed to load any schema versions from {versions_to_try}. Last error: {last_error}")
     
+    def get_schema_by_version(self, version: str) -> Optional[HedSchema]:
+        """Get a specific schema version from the loaded schemas.
+        
+        Args:
+            version: Schema version to retrieve
+            
+        Returns:
+            HedSchema object or None if not loaded
+        """
+        return self._multiple_schemas.get(version)
+    
+    def get_loaded_schema_versions(self) -> List[str]:
+        """Get list of currently loaded schema versions.
+        
+        Returns:
+            List of schema version strings
+        """
+        return list(self._multiple_schemas.keys())
+    
+    def get_all_schema_tags(self, version: Optional[str] = None) -> Set[str]:
+        """Get all available tags from a schema.
+        
+        Args:
+            version: Schema version (uses current schema if None)
+            
+        Returns:
+            Set of all tag names
+        """
+        try:
+            schema = self.get_schema_by_version(version) if version else self.schema
+            
+            if schema is None:
+                logger.warning(f"Schema {'version ' + version if version else ''} not loaded")
+                return set()
+            
+            if hasattr(schema, 'get_all_tags'):
+                return set(schema.get_all_tags())
+            elif hasattr(schema, 'tags'):
+                return set(schema.tags.keys())
+            else:
+                logger.warning("Schema object does not support tag enumeration")
+                return set()
+                
+        except Exception as e:
+            logger.error(f"Error getting schema tags: {e}")
+            return set()
+    
+    def validate_tag(self, tag: str, version: Optional[str] = None) -> bool:
+        """Validate if a tag exists in the schema.
+        
+        Args:
+            tag: HED tag to validate
+            version: Schema version (uses current schema if None)
+            
+        Returns:
+            True if tag is valid
+        """
+        try:
+            schema = self.get_schema_by_version(version) if version else self.schema
+            
+            if schema is None:
+                logger.warning(f"Schema {'version ' + version if version else ''} not loaded")
+                return False
+            
+            if hasattr(schema, 'check_compliance'):
+                # Try to validate using HedString if available
+                if HedString:
+                    hed_string = HedString(tag)
+                    issues = hed_string.validate(schema)
+                    return len(issues) == 0
+            
+            # Fallback to checking if tag exists in schema
+            all_tags = self.get_all_schema_tags(version)
+            return tag in all_tags
+            
+        except Exception as e:
+            logger.error(f"Error validating tag '{tag}': {e}")
+            return False
+    
+    def get_tag_descendants(self, tag: str, version: Optional[str] = None) -> List[str]:
+        """Get all descendant tags of a given tag.
+        
+        Args:
+            tag: Parent tag to find descendants for
+            version: Schema version (uses current schema if None)
+            
+        Returns:
+            List of descendant tag names
+        """
+        try:
+            schema = self.get_schema_by_version(version) if version else self.schema
+            
+            if schema is None:
+                logger.warning(f"Schema {'version ' + version if version else ''} not loaded")
+                return []
+            
+            if hasattr(schema, 'get_tag_descendants'):
+                return schema.get_tag_descendants(tag)
+            elif hasattr(schema, 'tags'):
+                # Manual implementation for schemas without direct support
+                descendants = []
+                tag_lower = tag.lower()
+                
+                for schema_tag in schema.tags:
+                    if schema_tag.lower().startswith(tag_lower + '/'):
+                        descendants.append(schema_tag)
+                
+                return descendants
+            
+            return []
+            
+        except Exception as e:
+            logger.error(f"Error getting descendants for tag '{tag}': {e}")
+            return []
+    
+    def find_similar_tags(self, partial_tag: str, version: Optional[str] = None, 
+                         max_results: int = 10) -> List[str]:
+        """Find tags similar to a partial tag string.
+        
+        Args:
+            partial_tag: Partial tag to search for
+            version: Schema version (uses current schema if None)
+            max_results: Maximum number of results to return
+            
+        Returns:
+            List of similar tag names
+        """
+        try:
+            all_tags = self.get_all_schema_tags(version)
+            partial_lower = partial_tag.lower()
+            
+            # Find exact matches first, then partial matches
+            exact_matches = [tag for tag in all_tags if tag.lower() == partial_lower]
+            partial_matches = [tag for tag in all_tags 
+                             if partial_lower in tag.lower() and tag not in exact_matches]
+            
+            # Combine and limit results
+            results = exact_matches + partial_matches
+            return results[:max_results]
+            
+        except Exception as e:
+            logger.error(f"Error finding similar tags for '{partial_tag}': {e}")
+            return []
+    
+    def compare_schema_versions(self, version1: str, version2: str) -> Dict[str, Any]:
+        """Compare two schema versions and return differences.
+        
+        Args:
+            version1: First schema version
+            version2: Second schema version
+            
+        Returns:
+            Dictionary with comparison results
+        """
+        try:
+            schema1 = self.get_schema_by_version(version1)
+            schema2 = self.get_schema_by_version(version2)
+            
+            if schema1 is None or schema2 is None:
+                missing = []
+                if schema1 is None:
+                    missing.append(version1)
+                if schema2 is None:
+                    missing.append(version2)
+                return {
+                    "error": f"Schema versions not loaded: {missing}",
+                    "version1": version1,
+                    "version2": version2
+                }
+            
+            tags1 = self.get_all_schema_tags(version1)
+            tags2 = self.get_all_schema_tags(version2)
+            
+            comparison = {
+                "version1": version1,
+                "version2": version2,
+                "tags_in_v1_only": list(tags1 - tags2),
+                "tags_in_v2_only": list(tags2 - tags1),
+                "common_tags": list(tags1 & tags2),
+                "total_tags_v1": len(tags1),
+                "total_tags_v2": len(tags2),
+                "similarity_percentage": (len(tags1 & tags2) / len(tags1 | tags2)) * 100 if tags1 | tags2 else 100
+            }
+            
+            return comparison
+            
+        except Exception as e:
+            logger.error(f"Error comparing schema versions {version1} and {version2}: {e}")
+            return {
+                "error": str(e),
+                "version1": version1,
+                "version2": version2
+            }
+
     def _update_schema_info(self):
         """Update cached schema information."""
         if self.schema is None:
@@ -214,7 +508,7 @@ class SchemaHandler:
         if self.schema is None:
             return OperationResult(
                 success=False,
-                error="No schema loaded",
+                error="No schema loaded for validation",
                 processing_time=time.time() - start_time
             )
         
@@ -241,19 +535,23 @@ class SchemaHandler:
             )
             
         except Exception as e:
-            logger.error(f"Schema validation error: {e}")
+            error_msg = f"Schema validation error: {e}"
+            logger.error(error_msg)
             return OperationResult(
                 success=False,
-                error=str(e),
+                error=error_msg,
                 processing_time=time.time() - start_time
             )
     
     def _validate_schema_blocking(self) -> List[Dict[str, Any]]:
         """Validate schema (blocking operation for thread pool)."""
-        if hasattr(self.schema, 'check_compliance'):
-            issues = self.schema.check_compliance()
-            return [{"message": str(issue), "type": "compliance"} for issue in issues]
-        return []
+        try:
+            if hasattr(self.schema, 'check_compliance'):
+                issues = self.schema.check_compliance()
+                return [{"message": str(issue), "type": "compliance"} for issue in issues]
+            return []
+        except Exception as e:
+            return [{"message": f"Validation error: {e}", "type": "error"}]
     
     def get_available_schemas(self) -> List[Dict[str, str]]:
         """Get list of available HED schema versions.
@@ -277,6 +575,7 @@ class SchemaHandler:
     def clear_cache(self):
         """Clear the schema cache."""
         self._schema_cache.clear()
+        self._multiple_schemas.clear()
         logger.info("Schema cache cleared")
     
     def get_cache_info(self) -> Dict[str, Any]:
@@ -288,6 +587,7 @@ class SchemaHandler:
         return {
             "cached_schemas": list(self._schema_cache.keys()),
             "cache_size": len(self._schema_cache),
+            "multiple_schemas": list(self._multiple_schemas.keys()),
             "current_schema": self._schema_info.version if self._schema_info else None
         }
     
@@ -300,27 +600,101 @@ class SchemaHandler:
         Returns:
             Dictionary mapping versions to load success status
         """
-        results = {}
+        result = await self.load_multiple_schemas(versions)
         
-        for version in versions:
-            try:
-                result = await self.load_schema(version=version)
-                results[version] = result.success
-                if result.success:
-                    logger.info(f"Preloaded schema version: {version}")
-                else:
-                    logger.warning(f"Failed to preload schema version {version}: {result.error}")
-            except Exception as e:
-                logger.error(f"Error preloading schema {version}: {e}")
-                results[version] = False
-        
-        return results
+        if result.success and result.data:
+            results = {}
+            loaded_schemas = result.data.get("loaded_schemas", [])
+            failed_schemas = result.data.get("failed_schemas", {})
+            
+            for version in versions:
+                results[version] = version in loaded_schemas
+                
+            return results
+        else:
+            return {version: False for version in versions}
     
     def close(self):
         """Clean up resources."""
         if self._executor:
             self._executor.shutdown(wait=True)
             logger.info("Schema handler executor shut down")
+
+
+# Utility functions for common schema operations
+def load_hed_schema(version: str = "8.3.0") -> Tuple[Optional[HedSchema], Optional[str]]:
+    """Utility function to quickly load a HED schema.
+    
+    Args:
+        version: HED schema version to load
+        
+    Returns:
+        Tuple of (schema, error_message)
+    """
+    try:
+        if load_schema_version is None:
+            return None, "HED library not available"
+        
+        schema = load_schema_version(version)
+        return schema, None
+    except Exception as e:
+        return None, str(e)
+
+
+def validate_hed_tag_simple(tag: str, schema: HedSchema) -> Tuple[bool, List[str]]:
+    """Simple utility to validate a HED tag against a schema.
+    
+    Args:
+        tag: HED tag to validate
+        schema: HED schema to validate against
+        
+    Returns:
+        Tuple of (is_valid, list_of_errors)
+    """
+    try:
+        if HedString is None:
+            return False, ["HED library not available"]
+        
+        hed_string = HedString(tag)
+        issues = hed_string.validate(schema)
+        
+        if issues:
+            errors = [str(issue) for issue in issues]
+            return False, errors
+        else:
+            return True, []
+            
+    except Exception as e:
+        return False, [str(e)]
+
+
+def get_schema_version_info(schema: HedSchema) -> Dict[str, Any]:
+    """Extract version information from a HED schema.
+    
+    Args:
+        schema: HED schema object
+        
+    Returns:
+        Dictionary with schema version information
+    """
+    try:
+        info = {
+            "version": getattr(schema, 'version_number', 'unknown'),
+            "name": getattr(schema, 'name', 'unknown'),
+            "tag_count": len(getattr(schema, 'tags', {})),
+            "has_units": hasattr(schema, 'units'),
+            "has_attributes": hasattr(schema, 'attributes'),
+        }
+        
+        if hasattr(schema, 'prologue'):
+            info["prologue"] = schema.prologue
+            
+        if hasattr(schema, 'epilogue'):
+            info["epilogue"] = schema.epilogue
+            
+        return info
+    except Exception as e:
+        return {"error": str(e)}
 
 
 class SchemaManagerFacade:
