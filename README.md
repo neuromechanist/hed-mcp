@@ -1,5 +1,6 @@
 # HED MCP Server
 
+> [!CAUTION]
 > **Implementation Status**: This project is currently in active development. The implementation is coming soon!
 
 A Model Context Protocol (MCP) server that assists with HED (Hierarchical Event Descriptors) sidecar creation and annotation. The server leverages LLMs to automate the typically manual process of categorizing BIDS event file columns and generate valid HED sidecar templates using hed-python tools.
