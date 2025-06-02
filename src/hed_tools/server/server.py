@@ -1045,7 +1045,11 @@ class HEDServer:
             return [
                 types.TextContent(
                     type="text",
-                    text=f"📄 HED Sidecar Generation Failed\n\nError: {str(e)}\n\nPlease check the parameters and try again.",
+                    text=(
+                        f"📄 HED Sidecar Generation Failed\n\n"
+                        f"Error: {str(e)}\n\n"
+                        f"Please check the parameters and try again."
+                    ),
                 )
             ]
 
