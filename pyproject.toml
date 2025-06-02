@@ -29,6 +29,7 @@ dependencies = [
     "mcp>=1.9.0",
     "pandas>=2.0.0",
     "numpy>=1.24.0",
+    "aiofiles>=24.1.0",
 ]
 
 [project.optional-dependencies]
@@ -137,3 +138,8 @@ exclude_lines = [
     "if 0:",
     "if __name__ == .__main__.:",
 ] 
+
+[dependency-groups]
+dev = [
+    "pytest>=8.3.5",
+]
