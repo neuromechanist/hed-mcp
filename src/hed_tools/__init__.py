@@ -15,8 +15,13 @@ __version__ = "0.1.0"
 
 # Core components - import with graceful fallbacks
 try:
-    from .server.server import HEDServer, create_server
+    from .server.server import main as server_main
+
+    # For backward compatibility, we can create a simple wrapper
+    HEDServer = None  # No longer available as we use FastMCP
+    create_server = None  # No longer needed with FastMCP
 except ImportError:
+    server_main = None
     HEDServer = None
     create_server = None
 
@@ -47,16 +52,16 @@ __all__ = [
     # Version info
     "__version__",
     # Core classes
-    "HEDServer",
     "HEDWrapper",
     "BIDSColumnAnalyzer",
     "ColumnAnalyzer",
     "FileHandler",
     # Factory functions
-    "create_server",
     "create_hed_wrapper",
     "create_column_analyzer",
     "create_file_handler",
+    # Server function
+    "server_main",
     # High-level convenience functions
     "create_integration_suite",
     "get_package_info",
@@ -75,8 +80,9 @@ def create_integration_suite(schema_version: str = "latest") -> dict:
     """
     suite = {}
 
-    if HEDServer is not None:
-        suite["server"] = create_server()
+    # Note: Server is now a FastMCP server and should be run via main() function
+    if server_main is not None:
+        suite["server_main"] = server_main  # Reference to the main function
 
     if HEDWrapper is not None:
         suite["hed_wrapper"] = create_hed_wrapper(schema_version)

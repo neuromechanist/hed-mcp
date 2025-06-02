@@ -117,7 +117,7 @@ pip install uv
 
 ```bash
 # Clone the repository
-git clone https://github.com/hed-standard/hed-mcp.git
+git clone https://github.com/neuromechanist/hed-mcp.git
 cd hed-mcp
 
 # Set up development environment with uv
@@ -191,41 +191,111 @@ uv add --dev package-name
 # Update dependencies
 uv sync --upgrade
 
-# Run the server (when implemented)
+# Run the server
+uv run hed-mcp-server
+
+# Or run as a Python module
 uv run python -m hed_tools.server
 ```
 
-## Installation (Coming Soon)
+## Installation
+
+### Development Installation
+
+If you want to install from source for development:
+
+```bash
+# Clone the repository
+git clone https://github.com/neuromechanist/hed-mcp.git
+cd hed-mcp
+
+# Set up development environment with uv
+uv sync --dev
+
+# Install in editable mode
+uv run pip install -e .
+```
 
 ### From PyPI (When Available)
 
 ```bash
 # Install from PyPI (when available)
-uv add hed-mcp-server
+pip install hed-mcp
 
-# Or install in a new environment
-uv venv hed-mcp-env
-uv pip install hed-mcp-server
+# Or with uv
+uv add hed-mcp
+```
+
+## Running the Server
+
+After installation, you can run the HED MCP server using any of these methods:
+
+### Method 1: Using the console script (recommended)
+```bash
+hed-mcp-server
+```
+
+### Method 2: Using uv run with the console script
+```bash
+uv run hed-mcp-server
+```
+
+### Method 3: Using Python module execution
+```bash
+python -m hed_tools.server
+
+# Or with uv
+uv run python -m hed_tools.server
 ```
 
 ### Using pip
 
 ```bash
 # Alternative installation method
-pip install hed-mcp-server
+pip install hed-mcp
 ```
 
-## Usage Examples (Coming Soon)
+## Usage Examples
 
 ### With Claude Desktop
+
+Add this configuration to your Claude Desktop MCP settings:
+
+```json
+{
+  "mcpServers": {
+    "hed-mcp": {
+      "command": "hed-mcp-server",
+      "args": []
+    }
+  }
+}
+```
+
+### Alternative configurations
+
+If you installed from source and want to use uv:
 
 ```json
 {
   "mcpServers": {
     "hed-mcp": {
       "command": "uv",
-      "args": ["run", "python", "-m", "hed_tools.server"],
+      "args": ["run", "hed-mcp-server"],
       "cwd": "/path/to/hed-mcp"
+    }
+  }
+}
+```
+
+Or using Python module execution:
+
+```json
+{
+  "mcpServers": {
+    "hed-mcp": {
+      "command": "python",
+      "args": ["-m", "hed_tools.server"]
     }
   }
 }

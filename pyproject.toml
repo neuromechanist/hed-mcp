@@ -44,6 +44,9 @@ dependencies = [
     "psutil>=7.0.0",
 ]
 
+[project.scripts]
+hed-mcp-server = "hed_tools.server:main"
+
 [project.optional-dependencies]
 dev = [
     "pytest>=7.0.0",
