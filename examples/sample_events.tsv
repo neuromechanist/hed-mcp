@@ -1,0 +1,6 @@
+onset	duration	trial_type	response	stimulus
+0.0	0.5	go	left	visual
+1.0	0.5	stop	right	auditory
+2.0	0.5	go	left	visual
+3.0	0.5	nogo		visual
+4.0	0.5	stop	right	auditory
