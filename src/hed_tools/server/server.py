@@ -6,7 +6,6 @@ tools integration, including column analysis and sidecar generation capabilities
 
 import anyio
 import logging
-import os
 from typing import Any, Dict, List
 
 import mcp.types as types
@@ -30,51 +29,42 @@ class HEDServer:
     """
 
     def __init__(self):
-        """Initialize the HED MCP server."""
+        """Initialize the HED MCP Server."""
         self.server = Server("hed-tools")
-        self.hed_wrapper = None
-        self.hed_validator = None
-        self.schema_manager = None
-        self.column_analyzer = None
-
-        # Setup server handlers
-        self._setup_tools()
-        self._setup_resources()
-
-        # Initialize HED components
-        self._initialize_hed_components()
-
         logger.info("HED MCP Server initialized")
 
-    def _initialize_hed_components(self):
-        """Initialize HED wrapper and related components."""
+        # Try to initialize HED components but handle graceful degradation
+        self.validator = None
+        self.schema_manager = None
+        self.hed_wrapper = None
+        self.column_analyzer = None
+
         try:
-            # Import here to handle graceful degradation if modules aren't available
+            # Import HED components conditionally
             from ..hed_integration.validation import HEDValidator
             from ..hed_integration.schema import SchemaManagerFacade
-            from ..hed_integration.hed_wrapper import HEDWrapper
+            from ..hed_integration.hed_wrapper import HEDWrapper, HEDWrapperConfig
             from ..tools.column_analyzer import ColumnAnalyzer
 
-            # Get schema version from environment or use default
-            schema_version = os.getenv("HED_SCHEMA_VERSION", "8.3.0")
-
-            # Initialize HED components
-            self.hed_wrapper = HEDWrapper(schema_version=schema_version)
-            self.hed_validator = HEDValidator(self.hed_wrapper)
-            self.schema_manager = SchemaManagerFacade(schema_version=schema_version)
+            # Initialize HED components with proper config
+            config = HEDWrapperConfig(hed_schema="8.3.0")
+            self.hed_wrapper = HEDWrapper(config=config)
+            self.validator = HEDValidator()
+            self.schema_manager = SchemaManagerFacade()
             self.column_analyzer = ColumnAnalyzer()
 
-            logger.info(
-                f"HED components initialized with schema version {schema_version}"
-            )
+            logger.info("HED components initialized successfully")
 
         except Exception as e:
             logger.error(f"Failed to initialize HED components: {e}")
-            # Continue without HED components for basic testing
             logger.warning("Server will run with limited functionality")
 
-    def _setup_tools(self):
-        """Setup MCP tools for HED operations."""
+        # Register tools and resources
+        self._register_tools()
+        self._register_resources()
+
+    def _register_tools(self):
+        """Register MCP tools for HED operations."""
 
         @self.server.list_tools()
         async def list_tools() -> List[types.Tool]:
@@ -168,8 +158,8 @@ class HEDServer:
                 logger.error(f"Tool call error for {name}: {e}")
                 raise ValueError(f"Tool execution failed: {str(e)}")
 
-    def _setup_resources(self):
-        """Setup MCP resources for HED schemas and metadata."""
+    def _register_resources(self):
+        """Register MCP resources for HED schemas and metadata."""
 
         @self.server.list_resources()
         async def list_resources():
@@ -198,7 +188,7 @@ class HEDServer:
         if not annotation:
             raise ValueError("No annotation provided")
 
-        if not self.hed_validator:
+        if not self.validator:
             return [
                 types.TextContent(
                     type="text",
@@ -207,7 +197,7 @@ class HEDServer:
             ]
 
         try:
-            result = await self.hed_validator.validate_annotation(
+            result = await self.validator.validate_annotation(
                 annotation, schema_version=schema_version
             )
 
@@ -231,13 +221,7 @@ class HEDServer:
     async def _analyze_event_columns(
         self, arguments: Dict[str, Any]
     ) -> List[types.TextContent]:
-        """Analyze BIDS event file columns."""
-        file_path = arguments.get("file_path", "")
-        max_unique_values = arguments.get("max_unique_values", 20)
-
-        if not file_path:
-            raise ValueError("No file_path provided")
-
+        """Analyze columns in a BIDS events file."""
         if not self.column_analyzer:
             return [
                 types.TextContent(
@@ -247,34 +231,33 @@ class HEDServer:
             ]
 
         try:
-            result = await self.column_analyzer.analyze_file(
-                file_path, max_unique_values=max_unique_values
-            )
+            file_path = arguments.get("file_path")
+            max_unique_values = arguments.get("max_unique_values", 10)
+
+            if not file_path:
+                raise ValueError("file_path parameter is required")
+
+            # Use the correct method name
+            result = await self.column_analyzer.analyze_events_file(file_path)
 
             # Format the response
-            response = f"📊 Column Analysis Results for: {file_path}\n\n"
-            response += f"Total rows: {result.get('total_rows', 'unknown')}\n"
-            response += f"Total columns: {result.get('total_columns', 'unknown')}\n\n"
+            response = f"""📊 Column Analysis Results
 
-            # Add column details
-            columns = result.get("columns", {})
-            response += "Columns:\n"
-            for col_name, col_info in columns.items():
-                response += f"\n• {col_name}:\n"
-                response += f"  - Type: {col_info.get('dtype', 'unknown')}\n"
-                response += f"  - Unique values: {col_info.get('unique_count', 0)}\n"
-                response += (
-                    f"  - Sample values: {col_info.get('sample_values', [])[:5]}\n"
-                )
+File: {file_path}
+Analysis completed successfully.
 
-            # Add suggestions
-            suggestions = result.get("suggestions", {})
-            if suggestions:
-                response += "\n💡 Suggestions:\n"
-                response += f"Skip columns: {suggestions.get('likely_skip_cols', [])}\n"
-                response += (
-                    f"Value columns: {suggestions.get('likely_value_cols', [])}\n"
-                )
+Columns analyzed: {len(result.get('columns', {}))}
+BIDS compliance: {'✅ Compliant' if result.get('bids_compliance', {}).get('is_compliant') else '❌ Issues found'}
+
+Column Details:
+{self._format_column_analysis(result.get('columns', {}), max_unique_values)}
+
+Summary:
+{result.get('summary', {}).get('description', 'No summary available')}
+
+Recommendations:
+{chr(10).join('• ' + rec for rec in result.get('recommendations', []))}
+"""
 
             return [types.TextContent(type="text", text=response)]
 
@@ -402,6 +385,36 @@ class HEDServer:
         import json
 
         return json.dumps(schema_info, indent=2)
+
+    def _format_column_analysis(
+        self, columns: Dict[str, Any], max_unique_values: int
+    ) -> str:
+        """Format column analysis results for display."""
+        if not columns:
+            return "No columns found"
+
+        output = []
+        for col_name, col_info in columns.items():
+            col_type = col_info.get("type", "unknown")
+            unique_count = col_info.get("unique_count", 0)
+
+            line = f"• {col_name} ({col_type}): {unique_count} unique values"
+
+            # Add sample values if available
+            sample_values = col_info.get("sample_values", [])
+            if sample_values:
+                samples = str(sample_values[:3])[1:-1]  # Remove brackets
+                line += f" - samples: {samples}"
+
+            # Add HED suggestion if available
+            bids_match = col_info.get("bids_match")
+            if bids_match and bids_match.get("is_hed_candidate"):
+                priority = bids_match.get("hed_priority", "medium")
+                line += f" - HED candidate ({priority} priority)"
+
+            output.append(line)
+
+        return "\n".join(output)
 
     async def run(self):
         """Run the MCP server with stdio transport."""
