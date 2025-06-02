@@ -564,6 +564,9 @@ class SidecarPipeline:
 
         # Generate final performance report
         final_report = self.get_performance_report()
+        performance_score = final_report.get("performance_summary", {}).get(
+            "performance_score", 0
+        )
         self.logger.info(
-            f"Pipeline cleanup completed. Final performance score: {final_report.get('performance_summary', {}).get('performance_score', 0):.1f}%"
+            f"Pipeline cleanup completed. Final performance score: {performance_score:.1f}%"
         )

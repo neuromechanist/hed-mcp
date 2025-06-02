@@ -1,236 +1,457 @@
-"""Data ingestion stage for the HED sidecar generation pipeline.
+"""Data ingestion stage for HED sidecar generation pipeline.
 
-This stage handles loading and initial validation of BIDS event files,
-extracting basic metadata and preparing data for subsequent processing stages.
+This stage handles:
+- File loading and format validation
+- Data preprocessing and cleaning
+- Initial metadata extraction
+- Error detection and reporting
 """
 
-import os
-from pathlib import Path
-from typing import Dict, Any, Optional
+import csv
+import io
+import logging
 import pandas as pd
+from pathlib import Path
+from typing import Any, Dict, List, Union
 
-from ..core import PipelineStage, PipelineContext
+from . import (
+    PipelineStage,
+    StageInput,
+    StageOutput,
+    create_stage_output,
+    register_stage,
+)
+
+logger = logging.getLogger(__name__)
 
 
 class DataIngestionStage(PipelineStage):
-    """Stage for loading and validating input data files.
+    """Stage for ingesting and validating tabular data files.
 
-    This stage:
-    1. Validates file path and accessibility
-    2. Detects file format and encoding
-    3. Loads data into a pandas DataFrame
-    4. Extracts basic metadata about the file
-    5. Validates file size and format requirements
+    This stage loads various file formats (CSV, TSV, Excel) and performs
+    initial validation and preprocessing to prepare data for subsequent
+    pipeline stages.
     """
 
-    async def validate_prerequisites(self, context: PipelineContext) -> bool:
-        """Validate that required input parameters are present."""
-        file_path = context.input_data.get("file_path")
-        if not file_path:
-            context.add_error("file_path parameter is required", self.name)
-            return False
+    def __init__(self, config: Dict[str, Any] = None):
+        super().__init__("data_ingestion", config)
 
-        if not isinstance(file_path, str) or not file_path.strip():
-            context.add_error("file_path must be a non-empty string", self.name)
-            return False
+        # Configuration with defaults
+        self.max_file_size_mb = self.get_config_value("max_file_size_mb", 100)
+        self.supported_extensions = self.get_config_value(
+            "supported_extensions", [".csv", ".tsv", ".xlsx", ".xls"]
+        )
+        self.default_encoding = self.get_config_value("encoding", "utf-8")
+        self.validate_headers = self.get_config_value("validate_headers", True)
+        self.clean_data = self.get_config_value("clean_data", True)
+        self.sample_size = self.get_config_value(
+            "sample_size", None
+        )  # None = full data
 
-        return True
+    async def _initialize_implementation(self) -> None:
+        """Initialize the data ingestion stage."""
+        self.logger.info(
+            f"Initializing data ingestion: max_size={self.max_file_size_mb}MB, "
+            f"extensions={self.supported_extensions}"
+        )
 
-    async def execute(self, context: PipelineContext) -> bool:
-        """Execute data ingestion and validation."""
+    async def _execute_implementation(self, stage_input: StageInput) -> StageOutput:
+        """Execute data ingestion for the given input."""
+        input_data = stage_input.get_data()
+
+        # Handle different input types
+        if isinstance(input_data, (str, Path)):
+            # File path input
+            return await self._load_from_file(
+                file_path=input_data,
+                metadata=stage_input.metadata,
+                context=stage_input.context,
+            )
+        elif isinstance(input_data, (str, bytes)) and len(input_data) > 0:
+            # Raw data input (CSV/TSV content)
+            return await self._load_from_string(
+                data_content=input_data,
+                metadata=stage_input.metadata,
+                context=stage_input.context,
+            )
+        elif isinstance(input_data, pd.DataFrame):
+            # DataFrame input (already loaded)
+            return await self._process_dataframe(
+                dataframe=input_data,
+                metadata=stage_input.metadata,
+                context=stage_input.context,
+            )
+        else:
+            return create_stage_output(
+                data=None,
+                metadata=stage_input.metadata,
+                context=stage_input.context,
+                errors=[f"Unsupported input type: {type(input_data)}"],
+            )
+
+    async def _load_from_file(
+        self,
+        file_path: Union[str, Path],
+        metadata: Dict[str, Any],
+        context: Dict[str, Any],
+    ) -> StageOutput:
+        """Load data from a file path."""
+        file_path = Path(file_path)
+
+        # Validate file existence
+        if not file_path.exists():
+            return create_stage_output(
+                data=None,
+                metadata=metadata,
+                context=context,
+                errors=[f"File not found: {file_path}"],
+            )
+
+        # Validate file size
+        file_size_mb = file_path.stat().st_size / (1024 * 1024)
+        if file_size_mb > self.max_file_size_mb:
+            return create_stage_output(
+                data=None,
+                metadata=metadata,
+                context=context,
+                errors=[
+                    f"File too large: {file_size_mb:.1f}MB exceeds limit of {self.max_file_size_mb}MB"
+                ],
+            )
+
+        # Validate file extension
+        if file_path.suffix.lower() not in self.supported_extensions:
+            return create_stage_output(
+                data=None,
+                metadata=metadata,
+                context=context,
+                errors=[
+                    f"Unsupported file type: {file_path.suffix}. "
+                    f"Supported: {', '.join(self.supported_extensions)}"
+                ],
+            )
+
         try:
-            file_path = context.input_data["file_path"]
-            self.logger.info(f"Loading data from: {file_path}")
-
-            # Validate file exists and is accessible
-            if not await self._validate_file_access(file_path, context):
-                return False
-
-            # Detect file format and load data
-            df = await self._load_data_file(file_path, context)
-            if df is None:
-                return False
-
-            # Extract and validate metadata
-            metadata = await self._extract_file_metadata(file_path, df, context)
-
-            # Store results in context
-            context.processed_data["dataframe"] = df
-            context.metadata.update(metadata)
-            context.set_stage_result(
-                self.name,
-                {
-                    "file_loaded": True,
-                    "row_count": len(df),
-                    "column_count": len(df.columns),
-                    "columns": df.columns.tolist(),
-                    "file_size_mb": metadata.get("file_size_mb", 0),
-                    "encoding": metadata.get("encoding", "unknown"),
-                },
-            )
-
-            self.logger.info(
-                f"Successfully loaded {len(df)} rows with {len(df.columns)} columns"
-            )
-            return True
-
-        except Exception as e:
-            context.add_error(f"Data ingestion failed: {str(e)}", self.name)
-            self.logger.error(f"Data ingestion error: {e}", exc_info=True)
-            return False
-
-    async def _validate_file_access(
-        self, file_path: str, context: PipelineContext
-    ) -> bool:
-        """Validate file exists and is accessible."""
-        path = Path(file_path)
-
-        if not path.exists():
-            context.add_error(f"File not found: {file_path}", self.name)
-            return False
-
-        if not path.is_file():
-            context.add_error(f"Path is not a file: {file_path}", self.name)
-            return False
-
-        if not os.access(file_path, os.R_OK):
-            context.add_error(f"File not readable: {file_path}", self.name)
-            return False
-
-        # Check file size limits
-        max_size_mb = self.config.get("max_file_size_mb", 100)
-        file_size_mb = path.stat().st_size / (1024 * 1024)
-
-        if file_size_mb > max_size_mb:
-            context.add_error(
-                f"File too large: {file_size_mb:.1f}MB exceeds limit of {max_size_mb}MB",
-                self.name,
-            )
-            return False
-
-        return True
-
-    async def _load_data_file(
-        self, file_path: str, context: PipelineContext
-    ) -> Optional[pd.DataFrame]:
-        """Load data file into pandas DataFrame."""
-        path = Path(file_path)
-        encoding = self.config.get("encoding", "utf-8")
-        delimiter = self.config.get("delimiter", "auto")
-
-        try:
-            # Auto-detect delimiter if needed
-            if delimiter == "auto":
-                delimiter = self._detect_delimiter(file_path)
-
-            # Handle different file formats
-            if path.suffix.lower() == ".csv":
-                df = pd.read_csv(file_path, encoding=encoding, sep=delimiter)
-            elif path.suffix.lower() == ".tsv":
-                df = pd.read_csv(file_path, encoding=encoding, sep="\t")
-            elif path.suffix.lower() in [".txt"]:
-                # Try tab first, then comma
-                try:
-                    df = pd.read_csv(file_path, encoding=encoding, sep="\t")
-                except (pd.errors.ParserError, pd.errors.EmptyDataError):
-                    df = pd.read_csv(file_path, encoding=encoding, sep=",")
+            # Load based on file extension
+            if file_path.suffix.lower() in [".csv", ".tsv"]:
+                dataframe = await self._load_csv_file(file_path)
+            elif file_path.suffix.lower() in [".xlsx", ".xls"]:
+                dataframe = await self._load_excel_file(file_path)
             else:
-                # Default to pandas auto-detection
-                df = pd.read_csv(file_path, encoding=encoding, sep=delimiter)
-
-            # Basic validation
-            if df.empty:
-                context.add_error("Loaded file contains no data", self.name)
-                return None
-
-            if len(df.columns) == 0:
-                context.add_error("Loaded file contains no columns", self.name)
-                return None
-
-            # Log any columns with all NaN values
-            empty_cols = df.columns[df.isnull().all()].tolist()
-            if empty_cols:
-                context.add_warning(
-                    f"Found completely empty columns: {empty_cols}", self.name
+                return create_stage_output(
+                    data=None,
+                    metadata=metadata,
+                    context=context,
+                    errors=[f"Cannot load file type: {file_path.suffix}"],
                 )
 
-            return df
+            # Update metadata with file information
+            file_metadata = {
+                "source_file": str(file_path),
+                "file_size_mb": file_size_mb,
+                "file_type": file_path.suffix.lower(),
+                "file_name": file_path.name,
+            }
+            metadata.update(file_metadata)
 
-        except UnicodeDecodeError as e:
-            context.add_error(f"Encoding error loading file: {str(e)}", self.name)
-            return None
-        except pd.errors.EmptyDataError:
-            context.add_error("File contains no data", self.name)
-            return None
+            return await self._process_dataframe(dataframe, metadata, context)
+
         except Exception as e:
-            context.add_error(f"Error loading file: {str(e)}", self.name)
-            return None
+            self.logger.error(f"Failed to load file {file_path}: {e}")
+            return create_stage_output(
+                data=None,
+                metadata=metadata,
+                context=context,
+                errors=[f"Failed to load file: {str(e)}"],
+            )
 
-    def _detect_delimiter(self, file_path: str) -> str:
-        """Detect the delimiter used in the file."""
+    async def _load_csv_file(self, file_path: Path) -> pd.DataFrame:
+        """Load CSV or TSV file."""
+        # Detect delimiter
+        delimiter = "\t" if file_path.suffix.lower() == ".tsv" else ","
+
+        # Try different encodings if default fails
+        encodings_to_try = [self.default_encoding, "utf-8-sig", "latin-1", "iso-8859-1"]
+
+        for encoding in encodings_to_try:
+            try:
+                df = pd.read_csv(
+                    file_path,
+                    delimiter=delimiter,
+                    encoding=encoding,
+                    na_values=["", "NA", "N/A", "null", "NULL"],
+                    keep_default_na=True,
+                )
+                self.logger.debug(
+                    f"Successfully loaded {file_path} with encoding {encoding}"
+                )
+                return df
+            except UnicodeDecodeError:
+                continue
+            except Exception as e:
+                if encoding == encodings_to_try[-1]:  # Last encoding to try
+                    raise e
+                continue
+
+        raise ValueError(
+            f"Could not decode file with any supported encoding: {encodings_to_try}"
+        )
+
+    async def _load_excel_file(self, file_path: Path) -> pd.DataFrame:
+        """Load Excel file."""
         try:
-            with open(file_path, "r", encoding="utf-8") as f:
-                first_line = f.readline()
+            # Load first sheet by default
+            df = pd.read_excel(
+                file_path, sheet_name=0, na_values=["", "NA", "N/A", "null", "NULL"]
+            )
+            return df
+        except Exception as e:
+            raise ValueError(f"Failed to load Excel file: {str(e)}")
 
-            # Count potential delimiters
-            tab_count = first_line.count("\t")
-            comma_count = first_line.count(",")
-            semicolon_count = first_line.count(";")
+    async def _load_from_string(
+        self,
+        data_content: Union[str, bytes],
+        metadata: Dict[str, Any],
+        context: Dict[str, Any],
+    ) -> StageOutput:
+        """Load data from string content."""
+        try:
+            # Convert bytes to string if necessary
+            if isinstance(data_content, bytes):
+                data_content = data_content.decode(self.default_encoding)
 
-            # Return the most common delimiter
-            if tab_count >= comma_count and tab_count >= semicolon_count:
-                return "\t"
-            elif comma_count >= semicolon_count:
-                return ","
-            else:
-                return ";"
+            # Detect delimiter by examining first few lines
+            delimiter = self._detect_delimiter(data_content)
 
+            # Load using pandas
+            df = pd.read_csv(
+                io.StringIO(data_content),
+                delimiter=delimiter,
+                na_values=["", "NA", "N/A", "null", "NULL"],
+                keep_default_na=True,
+            )
+
+            # Update metadata
+            string_metadata = {
+                "source_type": "string_content",
+                "delimiter": delimiter,
+                "content_length": len(data_content),
+            }
+            metadata.update(string_metadata)
+
+            return await self._process_dataframe(df, metadata, context)
+
+        except Exception as e:
+            self.logger.error(f"Failed to load from string content: {e}")
+            return create_stage_output(
+                data=None,
+                metadata=metadata,
+                context=context,
+                errors=[f"Failed to parse content: {str(e)}"],
+            )
+
+    def _detect_delimiter(self, content: str) -> str:
+        """Detect the delimiter used in CSV content."""
+        # Sample first few lines
+        lines = content.split("\n")[:5]
+        sample = "\n".join(lines)
+
+        # Use csv.Sniffer to detect delimiter
+        try:
+            sniffer = csv.Sniffer()
+            delimiter = sniffer.sniff(sample, delimiters=",\t;|").delimiter
+            return delimiter
         except Exception:
-            # Default to tab for BIDS event files
-            return "\t"
+            # Fallback: count occurrences of common delimiters
+            tab_count = sample.count("\t")
+            comma_count = sample.count(",")
+            semicolon_count = sample.count(";")
 
-    async def _extract_file_metadata(
-        self, file_path: str, df: pd.DataFrame, context: PipelineContext
-    ) -> Dict[str, Any]:
-        """Extract metadata about the loaded file."""
-        path = Path(file_path)
+            if tab_count > comma_count and tab_count > semicolon_count:
+                return "\t"
+            elif semicolon_count > comma_count:
+                return ";"
+            else:
+                return ","
 
-        metadata = {
-            "source_file": str(path.absolute()),
-            "file_name": path.name,
-            "file_size_mb": path.stat().st_size / (1024 * 1024),
-            "encoding": self.config.get("encoding", "utf-8"),
-            "row_count": len(df),
-            "column_count": len(df.columns),
-            "columns": df.columns.tolist(),
-            "dtypes": df.dtypes.to_dict(),
+    async def _process_dataframe(
+        self, dataframe: pd.DataFrame, metadata: Dict[str, Any], context: Dict[str, Any]
+    ) -> StageOutput:
+        """Process and validate loaded DataFrame."""
+        warnings = []
+        errors = []
+
+        # Basic validation
+        if dataframe.empty:
+            errors.append("Dataset is empty")
+            return create_stage_output(
+                data=None, metadata=metadata, context=context, errors=errors
+            )
+
+        # Sample data if requested
+        original_rows = len(dataframe)
+        if self.sample_size and self.sample_size < original_rows:
+            dataframe = dataframe.sample(n=self.sample_size, random_state=42)
+            warnings.append(
+                f"Sampled {self.sample_size} rows from {original_rows} total rows"
+            )
+
+        # Data cleaning
+        if self.clean_data:
+            dataframe, cleaning_warnings = self._clean_dataframe(dataframe)
+            warnings.extend(cleaning_warnings)
+
+        # Header validation
+        if self.validate_headers:
+            header_warnings = self._validate_headers(dataframe)
+            warnings.extend(header_warnings)
+
+        # Extract data characteristics
+        data_info = self._extract_data_info(dataframe)
+
+        # Update metadata with processing information
+        processing_metadata = {
+            "rows_processed": len(dataframe),
+            "columns_processed": len(dataframe.columns),
+            "original_rows": original_rows,
+            "processing_applied": {
+                "cleaned": self.clean_data,
+                "sampled": self.sample_size is not None
+                and self.sample_size < original_rows,
+                "headers_validated": self.validate_headers,
+            },
+            "data_characteristics": data_info,
+        }
+        metadata.update(processing_metadata)
+
+        # Set context for next stages
+        context.update(
+            {
+                "dataframe_shape": dataframe.shape,
+                "column_names": list(dataframe.columns),
+                "data_types": {
+                    col: str(dtype) for col, dtype in dataframe.dtypes.items()
+                },
+            }
+        )
+
+        self.logger.info(
+            f"Successfully ingested data: {len(dataframe)} rows, {len(dataframe.columns)} columns"
+        )
+
+        return create_stage_output(
+            data=dataframe,
+            metadata=metadata,
+            context=context,
+            warnings=warnings,
+            errors=errors,
+        )
+
+    def _clean_dataframe(self, df: pd.DataFrame) -> tuple[pd.DataFrame, List[str]]:
+        """Clean the DataFrame and return warnings."""
+        warnings = []
+        cleaned_df = df.copy()
+
+        # Remove completely empty rows
+        empty_rows_before = len(cleaned_df)
+        cleaned_df = cleaned_df.dropna(how="all")
+        empty_rows_removed = empty_rows_before - len(cleaned_df)
+
+        if empty_rows_removed > 0:
+            warnings.append(f"Removed {empty_rows_removed} completely empty rows")
+
+        # Strip whitespace from string columns
+        string_columns = cleaned_df.select_dtypes(include=["object"]).columns
+        for col in string_columns:
+            cleaned_df[col] = cleaned_df[col].astype(str).str.strip()
+
+        # Replace common null representations
+        null_values = ["n/a", "N/A", "null", "NULL", "none", "None", "-", "--"]
+        cleaned_df = cleaned_df.replace(null_values, pd.NA)
+
+        return cleaned_df, warnings
+
+    def _validate_headers(self, df: pd.DataFrame) -> List[str]:
+        """Validate DataFrame headers and return warnings."""
+        warnings = []
+
+        # Check for duplicate column names
+        if df.columns.duplicated().any():
+            duplicates = df.columns[df.columns.duplicated()].tolist()
+            warnings.append(f"Found duplicate column names: {duplicates}")
+
+        # Check for empty column names
+        empty_cols = [i for i, col in enumerate(df.columns) if not col or pd.isna(col)]
+        if empty_cols:
+            warnings.append(f"Found empty column names at positions: {empty_cols}")
+
+        # Check for very long column names
+        long_cols = [col for col in df.columns if len(str(col)) > 100]
+        if long_cols:
+            warnings.append(
+                f"Found very long column names (>100 chars): {len(long_cols)} columns"
+            )
+
+        # Check for special characters in column names
+        special_char_cols = []
+        for col in df.columns:
+            col_str = str(col)
+            if any(
+                char in col_str
+                for char in ["/", "\\", ":", "*", "?", '"', "<", ">", "|"]
+            ):
+                special_char_cols.append(col)
+
+        if special_char_cols:
+            warnings.append(
+                f"Column names contain special characters: {len(special_char_cols)} columns"
+            )
+
+        return warnings
+
+    def _extract_data_info(self, df: pd.DataFrame) -> Dict[str, Any]:
+        """Extract characteristics and statistics about the data."""
+        info = {
+            "shape": {"rows": len(df), "columns": len(df.columns)},
             "memory_usage_mb": df.memory_usage(deep=True).sum() / (1024 * 1024),
+            "null_counts": df.isnull().sum().to_dict(),
+            "data_types": {col: str(dtype) for col, dtype in df.dtypes.items()},
+            "numeric_columns": list(df.select_dtypes(include=["number"]).columns),
+            "string_columns": list(df.select_dtypes(include=["object"]).columns),
+            "datetime_columns": list(df.select_dtypes(include=["datetime"]).columns),
         }
 
-        # Add basic statistics about columns
-        metadata["column_stats"] = {}
-        for col in df.columns:
-            col_stats = {
-                "dtype": str(df[col].dtype),
-                "null_count": df[col].isnull().sum(),
-                "unique_count": df[col].nunique(),
-            }
+        # Calculate null percentage
+        info["null_percentages"] = {
+            col: (count / len(df) * 100) for col, count in info["null_counts"].items()
+        }
 
-            # Add type-specific stats
-            if df[col].dtype in ["int64", "float64"]:
-                col_stats.update(
-                    {
-                        "min": df[col].min() if not df[col].empty else None,
-                        "max": df[col].max() if not df[col].empty else None,
-                        "mean": df[col].mean() if not df[col].empty else None,
-                    }
-                )
+        # Identify columns with high null rates
+        info["high_null_columns"] = [
+            col for col, pct in info["null_percentages"].items() if pct > 50
+        ]
 
-            metadata["column_stats"][col] = col_stats
+        return info
 
-        return metadata
+    async def _validate_input(self, stage_input: StageInput) -> None:
+        """Validate input for data ingestion stage."""
+        await super()._validate_input(stage_input)
 
-    async def cleanup(self, context: PipelineContext) -> None:
-        """Cleanup resources after data ingestion."""
+        input_data = stage_input.get_data()
+
+        # Check for valid input types
+        valid_types = (str, Path, bytes, pd.DataFrame)
+        if not isinstance(input_data, valid_types):
+            raise ValueError(
+                f"Invalid input type for data ingestion: {type(input_data)}. "
+                f"Expected one of: {valid_types}"
+            )
+
+    async def _cleanup_implementation(self) -> None:
+        """Clean up data ingestion stage resources."""
         # No specific cleanup needed for this stage
         pass
+
+
+# Register the stage
+register_stage("data_ingestion", DataIngestionStage)

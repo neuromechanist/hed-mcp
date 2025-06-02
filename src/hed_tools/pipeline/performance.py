@@ -1,306 +1,227 @@
-"""Performance optimization module for the HED sidecar generation pipeline.
+"""Performance optimization components for HED sidecar generation pipeline.
 
-This module provides comprehensive performance optimization capabilities:
-- Profiling and bottleneck detection
-- Parallel processing for pipeline stages
-- Intelligent caching mechanisms
-- Memory optimization strategies
-- Performance monitoring and metrics
-- Batch processing optimizations
+This module provides performance monitoring, caching, parallel processing,
+and memory optimization to meet the <10 second execution time requirement.
 """
 
 import asyncio
-import time
-import threading
 import gc
-import logging
 import hashlib
+import json
+import logging
 import psutil
+import time
 from concurrent.futures import ThreadPoolExecutor, ProcessPoolExecutor
-from contextlib import contextmanager
 from dataclasses import dataclass, field
-from typing import Dict, List, Any, Optional, Callable, Tuple
 from functools import wraps
-import cProfile
-import tracemalloc
-from collections import defaultdict, OrderedDict
+from threading import Lock
+from typing import Any, Callable, Dict, List, Optional, Tuple
+import weakref
 
 logger = logging.getLogger(__name__)
 
 
 @dataclass
 class PerformanceMetrics:
-    """Container for performance measurement data."""
+    """Container for performance metrics."""
 
-    stage_name: str
-    start_time: float
-    end_time: float
-    duration: float
-    memory_before: int
-    memory_after: int
-    memory_peak: int
-    cpu_percent: float
-    success: bool
-    errors: List[str] = field(default_factory=list)
+    # Timing metrics
+    total_execution_time: float = 0.0
+    stage_execution_times: Dict[str, float] = field(default_factory=dict)
+    cache_hit_rate: float = 0.0
 
-    @property
-    def memory_delta(self) -> int:
-        """Memory change during execution."""
-        return self.memory_after - self.memory_before
+    # Memory metrics
+    peak_memory_usage_mb: float = 0.0
+    memory_efficiency: float = 0.0
 
+    # Throughput metrics
+    operations_per_second: float = 0.0
+    data_processed_mb: float = 0.0
 
-@dataclass
-class CacheStats:
-    """Cache performance statistics."""
+    # Quality metrics
+    performance_score: float = 0.0  # 0-100 score
+    bottleneck_stages: List[str] = field(default_factory=list)
 
-    hits: int = 0
-    misses: int = 0
-    size: int = 0
-    max_size: int = 0
+    def calculate_performance_score(self) -> float:
+        """Calculate overall performance score (0-100)."""
+        # Performance targets
+        target_time = 10.0  # seconds
+        target_memory = 500  # MB
 
-    @property
-    def hit_rate(self) -> float:
-        """Calculate cache hit rate."""
-        total = self.hits + self.misses
-        return self.hits / total if total > 0 else 0.0
+        # Time score (50% weight)
+        time_score = max(0, 100 - (self.total_execution_time / target_time * 100))
 
+        # Memory score (30% weight)
+        memory_score = max(0, 100 - (self.peak_memory_usage_mb / target_memory * 100))
 
-class PerformanceProfiler:
-    """Advanced profiler for pipeline performance analysis."""
+        # Cache efficiency score (20% weight)
+        cache_score = self.cache_hit_rate * 100
 
-    def __init__(self, enable_memory_tracking: bool = True):
-        self.enable_memory_tracking = enable_memory_tracking
-        self.stage_metrics: Dict[str, List[PerformanceMetrics]] = defaultdict(list)
-        self.profiler_data: Dict[str, cProfile.Profile] = {}
-        self.memory_snapshots: List[Tuple[float, int]] = []
-
-        if self.enable_memory_tracking:
-            tracemalloc.start()
-
-    @contextmanager
-    def profile_stage(self, stage_name: str):
-        """Context manager for profiling pipeline stages."""
-        # Initialize measurements
-        start_time = time.perf_counter()
-        process = psutil.Process()
-        memory_before = process.memory_info().rss
-        cpu_before = process.cpu_percent()
-
-        # Start code profiling
-        profiler = cProfile.Profile()
-        profiler.enable()
-
-        # Memory tracking
-        if self.enable_memory_tracking:
-            snapshot_before = tracemalloc.take_snapshot()
-
-        success = True
-        errors = []
-
-        try:
-            yield
-        except Exception as e:
-            success = False
-            errors.append(str(e))
-            raise
-        finally:
-            # Stop profiling
-            profiler.disable()
-            self.profiler_data[stage_name] = profiler
-
-            # Final measurements
-            end_time = time.perf_counter()
-            memory_after = process.memory_info().rss
-            cpu_after = process.cpu_percent()
-
-            # Memory peak detection
-            memory_peak = memory_after
-            if self.enable_memory_tracking:
-                snapshot_after = tracemalloc.take_snapshot()
-                top_stats = snapshot_after.compare_to(snapshot_before, "lineno")
-                if top_stats:
-                    memory_peak = max(stat.size for stat in top_stats[:10])
-
-            # Store metrics
-            metrics = PerformanceMetrics(
-                stage_name=stage_name,
-                start_time=start_time,
-                end_time=end_time,
-                duration=end_time - start_time,
-                memory_before=memory_before,
-                memory_after=memory_after,
-                memory_peak=memory_peak,
-                cpu_percent=(cpu_before + cpu_after) / 2,
-                success=success,
-                errors=errors,
-            )
-
-            self.stage_metrics[stage_name].append(metrics)
-
-            # Log performance summary
-            self._log_stage_performance(metrics)
-
-    def _log_stage_performance(self, metrics: PerformanceMetrics):
-        """Log stage performance summary."""
-        memory_mb = metrics.memory_delta / (1024 * 1024)
-
-        if metrics.success:
-            logger.info(
-                f"Stage {metrics.stage_name}: {metrics.duration:.2f}s, "
-                f"memory: {memory_mb:+.1f}MB, CPU: {metrics.cpu_percent:.1f}%"
-            )
-        else:
-            logger.warning(
-                f"Stage {metrics.stage_name} FAILED: {metrics.duration:.2f}s, "
-                f"errors: {len(metrics.errors)}"
-            )
-
-    def get_bottleneck_analysis(self) -> Dict[str, Any]:
-        """Identify performance bottlenecks."""
-        analysis = {
-            "slowest_stages": [],
-            "memory_intensive_stages": [],
-            "cpu_intensive_stages": [],
-            "failure_prone_stages": [],
-            "total_pipeline_time": 0.0,
-            "recommendations": [],
-        }
-
-        # Analyze each stage
-        for stage_name, metrics_list in self.stage_metrics.items():
-            if not metrics_list:
-                continue
-
-            avg_duration = sum(m.duration for m in metrics_list) / len(metrics_list)
-            avg_memory = sum(m.memory_delta for m in metrics_list) / len(metrics_list)
-            avg_cpu = sum(m.cpu_percent for m in metrics_list) / len(metrics_list)
-            failure_rate = sum(1 for m in metrics_list if not m.success) / len(
-                metrics_list
-            )
-
-            analysis["slowest_stages"].append((stage_name, avg_duration))
-            analysis["memory_intensive_stages"].append((stage_name, avg_memory))
-            analysis["cpu_intensive_stages"].append((stage_name, avg_cpu))
-
-            if failure_rate > 0:
-                analysis["failure_prone_stages"].append((stage_name, failure_rate))
-
-        # Sort by performance impact
-        analysis["slowest_stages"].sort(key=lambda x: x[1], reverse=True)
-        analysis["memory_intensive_stages"].sort(key=lambda x: x[1], reverse=True)
-        analysis["cpu_intensive_stages"].sort(key=lambda x: x[1], reverse=True)
-
-        analysis["total_pipeline_time"] = sum(
-            metrics[1] for metrics in analysis["slowest_stages"]
+        # Weighted average
+        self.performance_score = (
+            time_score * 0.5 + memory_score * 0.3 + cache_score * 0.2
         )
 
-        # Generate recommendations
-        analysis["recommendations"] = self._generate_recommendations(analysis)
-
-        return analysis
-
-    def _generate_recommendations(self, analysis: Dict[str, Any]) -> List[str]:
-        """Generate performance optimization recommendations."""
-        recommendations = []
-
-        if analysis["total_pipeline_time"] > 10.0:
-            recommendations.append(
-                f"Pipeline exceeds 10s target ({analysis['total_pipeline_time']:.1f}s). "
-                "Consider parallel processing or caching."
-            )
-
-        if analysis["slowest_stages"]:
-            slowest = analysis["slowest_stages"][0]
-            if slowest[1] > 3.0:
-                recommendations.append(
-                    f"Stage '{slowest[0]}' is bottleneck ({slowest[1]:.1f}s). "
-                    "Consider optimization or parallelization."
-                )
-
-        if analysis["memory_intensive_stages"]:
-            memory_heavy = analysis["memory_intensive_stages"][0]
-            if memory_heavy[1] > 100 * 1024 * 1024:  # 100MB
-                recommendations.append(
-                    f"Stage '{memory_heavy[0]}' uses excessive memory. "
-                    "Consider batch processing or streaming."
-                )
-
-        return recommendations
+        return self.performance_score
 
 
 class AdvancedCache:
-    """High-performance caching system with TTL and LRU eviction."""
+    """Advanced caching system with TTL, size limits, and LRU eviction."""
 
     def __init__(self, max_size: int = 1000, ttl_seconds: int = 3600):
         self.max_size = max_size
         self.ttl_seconds = ttl_seconds
-        self._cache: OrderedDict = OrderedDict()
-        self._timestamps: Dict[str, float] = {}
-        self._lock = threading.RLock()
-        self.stats = CacheStats(max_size=max_size)
+        self._cache: Dict[str, Tuple[Any, float]] = {}
+        self._access_times: Dict[str, float] = {}
+        self._lock = Lock()
+        self._stats = {"hits": 0, "misses": 0, "evictions": 0}
+
+    def _generate_key(self, stage_name: str, *args, **kwargs) -> str:
+        """Generate cache key from function arguments."""
+        key_data = {
+            "stage": stage_name,
+            "args": str(args),
+            "kwargs": str(sorted(kwargs.items())),
+        }
+        key_string = json.dumps(key_data, sort_keys=True)
+        return hashlib.md5(key_string.encode()).hexdigest()
 
     def get(self, key: str) -> Optional[Any]:
-        """Retrieve item from cache."""
+        """Get value from cache."""
         with self._lock:
-            current_time = time.time()
+            if key not in self._cache:
+                self._stats["misses"] += 1
+                return None
 
-            # Check if key exists and is not expired
-            if key in self._cache:
-                if current_time - self._timestamps[key] < self.ttl_seconds:
-                    # Move to end (most recently used)
-                    self._cache.move_to_end(key)
-                    self.stats.hits += 1
-                    return self._cache[key]
-                else:
-                    # Expired, remove
-                    del self._cache[key]
-                    del self._timestamps[key]
+            value, timestamp = self._cache[key]
 
-            self.stats.misses += 1
-            return None
-
-    def put(self, key: str, value: Any) -> None:
-        """Store item in cache."""
-        with self._lock:
-            current_time = time.time()
-
-            # Remove if already exists
-            if key in self._cache:
+            # Check TTL
+            if time.time() - timestamp > self.ttl_seconds:
                 del self._cache[key]
-                del self._timestamps[key]
+                del self._access_times[key]
+                self._stats["misses"] += 1
+                return None
 
-            # Evict oldest items if at capacity
-            while len(self._cache) >= self.max_size:
-                oldest_key = next(iter(self._cache))
-                del self._cache[oldest_key]
-                del self._timestamps[oldest_key]
+            # Update access time for LRU
+            self._access_times[key] = time.time()
+            self._stats["hits"] += 1
+            return value
 
-            # Add new item
-            self._cache[key] = value
-            self._timestamps[key] = current_time
-            self.stats.size = len(self._cache)
+    def set(self, key: str, value: Any) -> None:
+        """Set value in cache."""
+        with self._lock:
+            current_time = time.time()
+
+            # Evict if necessary
+            if len(self._cache) >= self.max_size and key not in self._cache:
+                self._evict_lru()
+
+            self._cache[key] = (value, current_time)
+            self._access_times[key] = current_time
+
+    def _evict_lru(self) -> None:
+        """Evict least recently used item."""
+        if not self._access_times:
+            return
+
+        lru_key = min(self._access_times.items(), key=lambda x: x[1])[0]
+        del self._cache[lru_key]
+        del self._access_times[lru_key]
+        self._stats["evictions"] += 1
 
     def clear(self) -> None:
-        """Clear all cached items."""
+        """Clear all cache entries."""
         with self._lock:
             self._cache.clear()
-            self._timestamps.clear()
-            self.stats.size = 0
+            self._access_times.clear()
+            self._stats = {"hits": 0, "misses": 0, "evictions": 0}
 
-    def get_stats(self) -> CacheStats:
-        """Get cache performance statistics."""
-        return self.stats
+    def get_stats(self) -> Dict[str, Any]:
+        """Get cache statistics."""
+        with self._lock:
+            total_requests = self._stats["hits"] + self._stats["misses"]
+            hit_rate = (
+                self._stats["hits"] / total_requests if total_requests > 0 else 0.0
+            )
+
+            return {
+                "hit_rate": hit_rate,
+                "size": len(self._cache),
+                "max_size": self.max_size,
+                "stats": self._stats.copy(),
+            }
+
+
+class MemoryOptimizer:
+    """Memory optimization utilities."""
+
+    def __init__(self, memory_limit_mb: int = 500):
+        self.memory_limit_mb = memory_limit_mb
+        self.process = psutil.Process()
+        self._weak_refs: List[weakref.ref] = []
+
+    def get_memory_usage_mb(self) -> float:
+        """Get current memory usage in MB."""
+        return self.process.memory_info().rss / 1024 / 1024
+
+    def check_memory_limit(self) -> bool:
+        """Check if memory usage is within limits."""
+        return self.get_memory_usage_mb() <= self.memory_limit_mb
+
+    def optimize_memory(self) -> float:
+        """Perform memory optimization and return freed memory in MB."""
+        memory_before = self.get_memory_usage_mb()
+
+        # Clean up weak references
+        self._cleanup_weak_refs()
+
+        # Force garbage collection
+        collected = gc.collect()
+
+        # Additional cleanup for large objects
+        self._cleanup_large_objects()
+
+        memory_after = self.get_memory_usage_mb()
+        freed_mb = memory_before - memory_after
+
+        logger.debug(
+            f"Memory optimization: freed {freed_mb:.2f}MB, collected {collected} objects"
+        )
+
+        return freed_mb
+
+    def _cleanup_weak_refs(self) -> None:
+        """Clean up dead weak references."""
+        self._weak_refs = [ref for ref in self._weak_refs if ref() is not None]
+
+    def _cleanup_large_objects(self) -> None:
+        """Clean up large objects that might be lingering."""
+        # This is a placeholder for more sophisticated cleanup
+        # Could include clearing specific caches, compacting data structures, etc.
+        pass
+
+    def register_for_cleanup(self, obj: Any) -> None:
+        """Register object for automatic cleanup."""
+        self._weak_refs.append(weakref.ref(obj))
 
 
 class ParallelProcessor:
-    """Parallel processing manager for pipeline stages."""
+    """Parallel processing manager for independent pipeline stages."""
 
-    def __init__(self, max_workers: int = None, use_processes: bool = False):
-        self.max_workers = max_workers or min(32, (psutil.cpu_count() or 1) + 4)
-        self.use_processes = use_processes
-        self.executor_class = (
-            ProcessPoolExecutor if use_processes else ThreadPoolExecutor
-        )
+    def __init__(self, max_workers: int = None):
+        self.max_workers = max_workers or min(4, (psutil.cpu_count() or 1))
+        self.thread_executor = None
+        self.process_executor = None
+
+    def __enter__(self):
+        self.thread_executor = ThreadPoolExecutor(max_workers=self.max_workers)
+        return self
+
+    def __exit__(self, exc_type, exc_val, exc_tb):
+        if self.thread_executor:
+            self.thread_executor.shutdown(wait=True)
+        if self.process_executor:
+            self.process_executor.shutdown(wait=True)
 
     async def execute_parallel_stages(
         self,
@@ -308,279 +229,351 @@ class ParallelProcessor:
         stage_contexts: List[Any],
         timeout: float = 30.0,
     ) -> List[Any]:
-        """Execute multiple independent stages in parallel."""
+        """Execute multiple stage functions in parallel."""
+        if not stage_functions:
+            return []
 
         loop = asyncio.get_event_loop()
 
-        with self.executor_class(max_workers=self.max_workers) as executor:
-            # Submit all tasks
-            future_to_stage = {
-                loop.run_in_executor(executor, func, context): (func, context)
-                for func, context in zip(stage_functions, stage_contexts)
-            }
-
-            # Collect results with timeout
-            results = []
-            try:
-                completed_futures = await asyncio.wait_for(
-                    asyncio.gather(*future_to_stage.keys(), return_exceptions=True),
-                    timeout=timeout,
-                )
-
-                for future_result in completed_futures:
-                    if isinstance(future_result, Exception):
-                        logger.error(f"Parallel stage failed: {future_result}")
-                        results.append(None)
-                    else:
-                        results.append(future_result)
-
-            except asyncio.TimeoutError:
-                logger.error(f"Parallel execution timed out after {timeout}s")
-                # Cancel remaining futures
-                for future in future_to_stage:
-                    future.cancel()
-                raise
-
-        return results
-
-    async def process_batch_parallel(
-        self,
-        items: List[Any],
-        processor_func: Callable,
-        batch_size: int = 10,
-        max_concurrent_batches: int = 3,
-    ) -> List[Any]:
-        """Process items in parallel batches."""
-
-        # Split into batches
-        batches = [items[i : i + batch_size] for i in range(0, len(items), batch_size)]
-
-        # Semaphore to limit concurrent batches
-        semaphore = asyncio.Semaphore(max_concurrent_batches)
-
-        async def process_batch(batch):
-            async with semaphore:
-                loop = asyncio.get_event_loop()
-                with self.executor_class(max_workers=len(batch)) as executor:
-                    tasks = [
-                        loop.run_in_executor(executor, processor_func, item)
-                        for item in batch
-                    ]
-                    return await asyncio.gather(*tasks, return_exceptions=True)
-
-        # Process all batches
-        batch_tasks = [process_batch(batch) for batch in batches]
-        batch_results = await asyncio.gather(*batch_tasks)
-
-        # Flatten results
-        results = []
-        for batch_result in batch_results:
-            results.extend(batch_result)
-
-        return results
-
-
-class MemoryOptimizer:
-    """Memory optimization utilities for large dataset processing."""
-
-    def __init__(self, memory_limit_mb: int = 500):
-        self.memory_limit_bytes = memory_limit_mb * 1024 * 1024
-        self.process = psutil.Process()
-
-    def get_memory_usage(self) -> int:
-        """Get current memory usage in bytes."""
-        return self.process.memory_info().rss
-
-    def is_memory_pressure(self) -> bool:
-        """Check if memory usage is approaching limit."""
-        return self.get_memory_usage() > self.memory_limit_bytes * 0.8
-
-    @contextmanager
-    def memory_management(self):
-        """Context manager for automatic memory management."""
-        initial_memory = self.get_memory_usage()
+        # Create tasks for parallel execution
+        tasks = []
+        for func, context in zip(stage_functions, stage_contexts):
+            task = loop.run_in_executor(self.thread_executor, func)
+            tasks.append(task)
 
         try:
-            yield
-        finally:
-            # Force garbage collection
-            gc.collect()
+            # Wait for all tasks with timeout
+            results = await asyncio.wait_for(
+                asyncio.gather(*tasks, return_exceptions=True), timeout=timeout
+            )
 
-            final_memory = self.get_memory_usage()
-            memory_delta = final_memory - initial_memory
+            # Process results and handle exceptions
+            processed_results = []
+            for i, result in enumerate(results):
+                if isinstance(result, Exception):
+                    logger.error(f"Parallel stage {i} failed: {result}")
+                    processed_results.append(None)
+                else:
+                    processed_results.append(result)
 
-            if memory_delta > 50 * 1024 * 1024:  # 50MB increase
-                logger.warning(
-                    f"High memory usage detected: +{memory_delta / (1024*1024):.1f}MB"
-                )
+            return processed_results
 
-    def optimize_dataframe_memory(self, df) -> Any:
-        """Optimize pandas DataFrame memory usage."""
+        except asyncio.TimeoutError:
+            logger.error(f"Parallel execution timed out after {timeout}s")
+            # Cancel remaining tasks
+            for task in tasks:
+                task.cancel()
+            return [None] * len(stage_functions)
+
+    async def execute_cpu_intensive_task(
+        self, func: Callable, *args, timeout: float = 30.0, **kwargs
+    ) -> Any:
+        """Execute CPU-intensive task in process pool."""
+        if not self.process_executor:
+            self.process_executor = ProcessPoolExecutor(max_workers=2)
+
+        loop = asyncio.get_event_loop()
+
         try:
-            import pandas as pd
+            result = await asyncio.wait_for(
+                loop.run_in_executor(self.process_executor, func, *args, **kwargs),
+                timeout=timeout,
+            )
+            return result
 
-            if not isinstance(df, pd.DataFrame):
-                return df
+        except asyncio.TimeoutError:
+            logger.error(f"CPU-intensive task timed out after {timeout}s")
+            return None
 
-            # Optimize numeric columns
-            for col in df.select_dtypes(include=["int"]).columns:
-                col_min = df[col].min()
-                col_max = df[col].max()
 
-                if col_min >= -128 and col_max <= 127:
-                    df[col] = df[col].astype("int8")
-                elif col_min >= -32768 and col_max <= 32767:
-                    df[col] = df[col].astype("int16")
-                elif col_min >= -2147483648 and col_max <= 2147483647:
-                    df[col] = df[col].astype("int32")
+class PerformanceProfiler:
+    """Performance profiler for detailed pipeline analysis."""
 
-            # Optimize float columns
-            for col in df.select_dtypes(include=["float"]).columns:
-                df[col] = pd.to_numeric(df[col], downcast="float")
+    def __init__(self):
+        self.start_time: Optional[float] = None
+        self.end_time: Optional[float] = None
+        self.stage_timings: Dict[str, Dict[str, float]] = {}
+        self.memory_snapshots: List[Tuple[float, float]] = []
+        self.bottlenecks: List[Dict[str, Any]] = []
 
-            # Convert object columns to category if beneficial
-            for col in df.select_dtypes(include=["object"]).columns:
-                if df[col].nunique() / len(df) < 0.5:  # Less than 50% unique values
-                    df[col] = df[col].astype("category")
+    def start_profiling(self) -> None:
+        """Start profiling session."""
+        self.start_time = time.perf_counter()
+        self._take_memory_snapshot()
 
-            return df
+    def end_profiling(self) -> None:
+        """End profiling session."""
+        self.end_time = time.perf_counter()
+        self._take_memory_snapshot()
 
-        except ImportError:
-            logger.warning("Pandas not available for DataFrame optimization")
-            return df
+    def start_stage(self, stage_name: str) -> None:
+        """Start timing a pipeline stage."""
+        if stage_name not in self.stage_timings:
+            self.stage_timings[stage_name] = {}
+
+        self.stage_timings[stage_name]["start"] = time.perf_counter()
+        self._take_memory_snapshot()
+
+    def end_stage(self, stage_name: str) -> None:
+        """End timing a pipeline stage."""
+        if stage_name not in self.stage_timings:
+            return
+
+        end_time = time.perf_counter()
+        start_time = self.stage_timings[stage_name].get("start", end_time)
+
+        self.stage_timings[stage_name]["end"] = end_time
+        self.stage_timings[stage_name]["duration"] = end_time - start_time
+
+        self._take_memory_snapshot()
+        self._check_for_bottleneck(stage_name)
+
+    def _take_memory_snapshot(self) -> None:
+        """Take memory usage snapshot."""
+        try:
+            process = psutil.Process()
+            memory_mb = process.memory_info().rss / 1024 / 1024
+            timestamp = time.perf_counter()
+            self.memory_snapshots.append((timestamp, memory_mb))
+        except Exception as e:
+            logger.warning(f"Failed to take memory snapshot: {e}")
+
+    def _check_for_bottleneck(self, stage_name: str) -> None:
+        """Check if stage is a performance bottleneck."""
+        stage_data = self.stage_timings[stage_name]
+        duration = stage_data.get("duration", 0)
+
+        # Consider a stage a bottleneck if it takes more than 3 seconds
+        if duration > 3.0:
+            self.bottlenecks.append(
+                {
+                    "stage": stage_name,
+                    "duration": duration,
+                    "severity": "high" if duration > 5.0 else "medium",
+                }
+            )
+
+    def get_metrics(self) -> PerformanceMetrics:
+        """Get comprehensive performance metrics."""
+        metrics = PerformanceMetrics()
+
+        if self.start_time and self.end_time:
+            metrics.total_execution_time = self.end_time - self.start_time
+
+        # Stage execution times
+        for stage_name, timing_data in self.stage_timings.items():
+            duration = timing_data.get("duration", 0)
+            metrics.stage_execution_times[stage_name] = duration
+
+        # Memory metrics
+        if self.memory_snapshots:
+            memory_values = [snapshot[1] for snapshot in self.memory_snapshots]
+            metrics.peak_memory_usage_mb = max(memory_values)
+
+            # Calculate memory efficiency (lower variation is better)
+            if len(memory_values) > 1:
+                mean_memory = sum(memory_values) / len(memory_values)
+                variance = sum((x - mean_memory) ** 2 for x in memory_values) / len(
+                    memory_values
+                )
+                metrics.memory_efficiency = max(0, 100 - (variance / mean_memory * 100))
+
+        # Bottlenecks
+        metrics.bottleneck_stages = [b["stage"] for b in self.bottlenecks]
+
+        # Calculate overall performance score
+        metrics.calculate_performance_score()
+
+        return metrics
+
+    def get_detailed_report(self) -> Dict[str, Any]:
+        """Get detailed performance report."""
+        metrics = self.get_metrics()
+
+        return {
+            "summary": {
+                "total_time": metrics.total_execution_time,
+                "performance_score": metrics.performance_score,
+                "peak_memory_mb": metrics.peak_memory_usage_mb,
+                "bottleneck_count": len(metrics.bottleneck_stages),
+            },
+            "stage_breakdown": {
+                stage: {
+                    "duration": duration,
+                    "percentage": (
+                        duration / metrics.total_execution_time * 100
+                        if metrics.total_execution_time > 0
+                        else 0
+                    ),
+                }
+                for stage, duration in metrics.stage_execution_times.items()
+            },
+            "bottlenecks": self.bottlenecks,
+            "memory_profile": {
+                "peak_usage_mb": metrics.peak_memory_usage_mb,
+                "efficiency_score": metrics.memory_efficiency,
+                "snapshots": len(self.memory_snapshots),
+            },
+            "recommendations": self._generate_recommendations(metrics),
+        }
+
+    def _generate_recommendations(self, metrics: PerformanceMetrics) -> List[str]:
+        """Generate performance recommendations."""
+        recommendations = []
+
+        if metrics.total_execution_time > 10.0:
+            recommendations.append(
+                "Consider enabling parallel processing to reduce execution time"
+            )
+
+        if metrics.peak_memory_usage_mb > 500:
+            recommendations.append(
+                "Memory usage is high - consider enabling memory optimization"
+            )
+
+        if metrics.cache_hit_rate < 0.5:
+            recommendations.append("Low cache hit rate - review caching strategy")
+
+        for bottleneck in metrics.bottleneck_stages:
+            recommendations.append(
+                f"Stage '{bottleneck}' is a bottleneck - consider optimization"
+            )
+
+        if metrics.memory_efficiency < 70:
+            recommendations.append(
+                "High memory variance detected - review memory allocation patterns"
+            )
+
+        return recommendations
 
 
 class PipelinePerformanceManager:
-    """Comprehensive performance management for the pipeline."""
+    """Main performance management system for the pipeline."""
 
-    def __init__(self, config: Dict[str, Any] = None):
-        self.config = config or {}
-
-        # Initialize components
-        self.profiler = PerformanceProfiler(
-            enable_memory_tracking=self.config.get("enable_memory_tracking", True)
-        )
-
+    def __init__(self, config: Dict[str, Any]):
+        self.config = config
         self.cache = AdvancedCache(
-            max_size=self.config.get("cache_size", 1000),
-            ttl_seconds=self.config.get("cache_ttl", 3600),
+            max_size=config.get("cache_size", 1000),
+            ttl_seconds=config.get("cache_ttl", 3600),
         )
-
-        self.parallel_processor = ParallelProcessor(
-            max_workers=self.config.get("max_workers"),
-            use_processes=self.config.get("use_processes", False),
-        )
-
         self.memory_optimizer = MemoryOptimizer(
-            memory_limit_mb=self.config.get("memory_limit_mb", 500)
+            memory_limit_mb=config.get("memory_limit_mb", 500)
         )
+        self.parallel_processor = ParallelProcessor(
+            max_workers=config.get("max_workers", 4)
+        )
+        self.profiler = PerformanceProfiler()
 
         # Performance targets
-        self.target_total_time = self.config.get("target_total_time", 10.0)
-        self.target_stage_time = self.config.get("target_stage_time", 3.0)
+        self.target_total_time = config.get("target_total_time", 10.0)
+        self.target_stage_time = config.get("target_stage_time", 3.0)
 
-    @contextmanager
-    def performance_context(self, stage_name: str):
-        """Combined performance management context."""
-        with self.profiler.profile_stage(stage_name):
-            with self.memory_optimizer.memory_management():
-                yield
-
-    def get_cached_result(self, cache_key: str) -> Optional[Any]:
-        """Get cached result if available."""
-        return self.cache.get(cache_key)
-
-    def cache_result(self, cache_key: str, result: Any) -> None:
-        """Cache computation result."""
-        self.cache.put(cache_key, result)
-
-    def generate_cache_key(self, *args, **kwargs) -> str:
-        """Generate deterministic cache key from arguments."""
-        key_data = {"args": args, "kwargs": sorted(kwargs.items())}
-        return hashlib.md5(str(key_data).encode()).hexdigest()
+        # Monitoring flags
+        self.enable_memory_tracking = config.get("enable_memory_tracking", True)
+        self.enable_profiling = config.get("enable_profiling", True)
 
     async def execute_optimized_stage(
         self,
         stage_name: str,
         stage_func: Callable,
-        stage_args: Tuple,
-        stage_kwargs: Dict[str, Any],
+        stage_args: Tuple = (),
+        stage_kwargs: Dict = None,
         enable_caching: bool = True,
     ) -> Any:
-        """Execute pipeline stage with all optimizations."""
+        """Execute a stage with full optimization."""
+        stage_kwargs = stage_kwargs or {}
 
-        # Generate cache key if caching enabled
+        # Generate cache key
         cache_key = None
         if enable_caching:
-            cache_key = self.generate_cache_key(stage_name, *stage_args, **stage_kwargs)
-            cached_result = self.get_cached_result(cache_key)
+            cache_key = self.cache._generate_key(
+                stage_name, *stage_args, **stage_kwargs
+            )
+            cached_result = self.cache.get(cache_key)
             if cached_result is not None:
                 logger.debug(f"Cache hit for stage {stage_name}")
                 return cached_result
 
-        # Execute with performance monitoring
-        with self.performance_context(stage_name):
+        # Start profiling
+        if self.enable_profiling:
+            self.profiler.start_stage(stage_name)
+
+        # Memory check before execution
+        if self.enable_memory_tracking:
+            if not self.memory_optimizer.check_memory_limit():
+                freed_mb = self.memory_optimizer.optimize_memory()
+                logger.info(
+                    f"Memory optimization freed {freed_mb:.2f}MB before {stage_name}"
+                )
+
+        try:
+            # Execute stage
             result = await stage_func(*stage_args, **stage_kwargs)
 
             # Cache successful results
             if enable_caching and cache_key and result is not None:
-                self.cache_result(cache_key, result)
+                self.cache.set(cache_key, result)
                 logger.debug(f"Cached result for stage {stage_name}")
 
             return result
 
+        finally:
+            # End profiling
+            if self.enable_profiling:
+                self.profiler.end_stage(stage_name)
+
+            # Memory cleanup after execution
+            if self.enable_memory_tracking:
+                current_memory = self.memory_optimizer.get_memory_usage_mb()
+                if current_memory > self.memory_optimizer.memory_limit_mb * 0.8:
+                    self.memory_optimizer.optimize_memory()
+
     def get_performance_report(self) -> Dict[str, Any]:
-        """Generate comprehensive performance report."""
-        bottleneck_analysis = self.profiler.get_bottleneck_analysis()
-        cache_stats = self.cache.get_stats()
-        memory_usage = self.memory_optimizer.get_memory_usage()
-
-        # Calculate compliance with performance targets
-        total_time = bottleneck_analysis["total_pipeline_time"]
-        meets_target = total_time <= self.target_total_time
-
+        """Get comprehensive performance report."""
         report = {
-            "performance_summary": {
-                "total_execution_time": total_time,
-                "target_time": self.target_total_time,
-                "meets_target": meets_target,
-                "performance_score": min(
-                    100, (self.target_total_time / max(total_time, 0.1)) * 100
-                ),
-            },
-            "bottleneck_analysis": bottleneck_analysis,
-            "cache_performance": {
-                "hit_rate": cache_stats.hit_rate,
-                "cache_size": cache_stats.size,
-                "total_requests": cache_stats.hits + cache_stats.misses,
-            },
-            "memory_usage": {
-                "current_mb": memory_usage / (1024 * 1024),
-                "limit_mb": self.memory_optimizer.memory_limit_bytes / (1024 * 1024),
-                "utilization_percent": (
-                    memory_usage / self.memory_optimizer.memory_limit_bytes
-                )
-                * 100,
-            },
-            "optimization_recommendations": bottleneck_analysis["recommendations"],
+            "cache_stats": self.cache.get_stats(),
+            "memory_usage_mb": self.memory_optimizer.get_memory_usage_mb(),
+            "memory_limit_mb": self.memory_optimizer.memory_limit_mb,
         }
+
+        if self.enable_profiling:
+            profiling_report = self.profiler.get_detailed_report()
+            report.update(profiling_report)
 
         return report
 
+    def start_session(self) -> None:
+        """Start performance monitoring session."""
+        if self.enable_profiling:
+            self.profiler.start_profiling()
 
-def performance_decorator(manager: PipelinePerformanceManager, stage_name: str):
-    """Decorator for automatic performance optimization of pipeline stages."""
+    def end_session(self) -> None:
+        """End performance monitoring session."""
+        if self.enable_profiling:
+            self.profiler.end_profiling()
 
-    def decorator(func):
+    async def cleanup(self) -> None:
+        """Clean up performance manager resources."""
+        self.cache.clear()
+        self.memory_optimizer.optimize_memory()
+        await self.parallel_processor.__aexit__(None, None, None)
+
+
+def performance_decorator(stage_name: str, enable_caching: bool = True):
+    """Decorator for automatic performance optimization."""
+
+    def decorator(func: Callable) -> Callable:
         @wraps(func)
         async def wrapper(*args, **kwargs):
-            return await manager.execute_optimized_stage(
-                stage_name=stage_name,
-                stage_func=func,
-                stage_args=args,
-                stage_kwargs=kwargs,
-                enable_caching=kwargs.pop("_enable_caching", True),
-            )
+            # This would need access to a performance manager instance
+            # For now, just add basic timing
+            start_time = time.perf_counter()
+            try:
+                result = await func(*args, **kwargs)
+                return result
+            finally:
+                execution_time = time.perf_counter() - start_time
+                logger.debug(f"Stage {stage_name} executed in {execution_time:.3f}s")
 
         return wrapper
 
@@ -588,99 +581,125 @@ def performance_decorator(manager: PipelinePerformanceManager, stage_name: str):
 
 
 class PerformanceTestFramework:
-    """Framework for testing and benchmarking pipeline performance."""
+    """Framework for performance testing and benchmarking."""
 
-    def __init__(self, pipeline_manager: PipelinePerformanceManager):
-        self.manager = pipeline_manager
+    def __init__(self):
         self.test_results: List[Dict[str, Any]] = []
 
-    async def benchmark_pipeline(
-        self, test_cases: List[Dict[str, Any]], iterations: int = 3
+    async def run_performance_test(
+        self,
+        test_name: str,
+        pipeline_func: Callable,
+        test_data: Any,
+        iterations: int = 3,
     ) -> Dict[str, Any]:
-        """Benchmark pipeline with various test cases."""
+        """Run performance test with multiple iterations."""
+        results = []
 
-        benchmark_results = {
-            "test_cases": [],
-            "overall_performance": {},
-            "recommendations": [],
+        for i in range(iterations):
+            profiler = PerformanceProfiler()
+            profiler.start_profiling()
+
+            start_time = time.perf_counter()
+            try:
+                await pipeline_func(test_data)
+                success = True
+                error = None
+            except Exception as e:
+                success = False
+                error = str(e)
+            finally:
+                execution_time = time.perf_counter() - start_time
+                profiler.end_profiling()
+
+            iteration_result = {
+                "iteration": i + 1,
+                "execution_time": execution_time,
+                "success": success,
+                "error": error,
+                "metrics": profiler.get_metrics() if success else None,
+            }
+
+            results.append(iteration_result)
+
+        # Calculate aggregate statistics
+        successful_runs = [r for r in results if r["success"]]
+
+        if successful_runs:
+            execution_times = [r["execution_time"] for r in successful_runs]
+            avg_time = sum(execution_times) / len(execution_times)
+            min_time = min(execution_times)
+            max_time = max(execution_times)
+
+            avg_performance_score = sum(
+                r["metrics"].performance_score for r in successful_runs
+            ) / len(successful_runs)
+        else:
+            avg_time = min_time = max_time = avg_performance_score = 0
+
+        test_result = {
+            "test_name": test_name,
+            "iterations": iterations,
+            "successful_runs": len(successful_runs),
+            "success_rate": len(successful_runs) / iterations,
+            "timing": {
+                "average": avg_time,
+                "minimum": min_time,
+                "maximum": max_time,
+                "meets_target": avg_time <= 10.0,
+            },
+            "average_performance_score": avg_performance_score,
+            "individual_results": results,
         }
 
-        for test_case in test_cases:
-            case_name = test_case["name"]
-            case_data = test_case["data"]
+        self.test_results.append(test_result)
+        return test_result
 
-            logger.info(f"Running benchmark: {case_name}")
+    def get_benchmark_report(self) -> Dict[str, Any]:
+        """Get comprehensive benchmark report."""
+        if not self.test_results:
+            return {"error": "No test results available"}
 
-            case_times = []
-            for iteration in range(iterations):
-                start_time = time.perf_counter()
+        # Overall statistics
+        all_times = []
+        all_scores = []
 
-                try:
-                    # Execute test case (would be actual pipeline execution)
-                    await self._execute_test_case(case_data)
-                    execution_time = time.perf_counter() - start_time
-                    case_times.append(execution_time)
+        for test in self.test_results:
+            if test["successful_runs"] > 0:
+                all_times.append(test["timing"]["average"])
+                all_scores.append(test["average_performance_score"])
 
-                except Exception as e:
-                    logger.error(f"Test case {case_name} failed: {e}")
-                    case_times.append(float("inf"))
-
-            # Calculate statistics
-            avg_time = sum(t for t in case_times if t != float("inf")) / len(
-                [t for t in case_times if t != float("inf")]
-            )
-            min_time = min(t for t in case_times if t != float("inf"))
-            max_time = max(t for t in case_times if t != float("inf"))
-
-            benchmark_results["test_cases"].append(
-                {
-                    "name": case_name,
-                    "avg_time": avg_time,
-                    "min_time": min_time,
-                    "max_time": max_time,
-                    "meets_target": avg_time <= self.manager.target_total_time,
-                    "iterations": iterations,
-                }
-            )
-
-        # Generate overall assessment
-        all_times = [case["avg_time"] for case in benchmark_results["test_cases"]]
-        benchmark_results["overall_performance"] = {
-            "average_execution_time": sum(all_times) / len(all_times),
-            "worst_case_time": max(all_times),
-            "best_case_time": min(all_times),
-            "target_compliance_rate": sum(
-                1 for case in benchmark_results["test_cases"] if case["meets_target"]
-            )
-            / len(benchmark_results["test_cases"]),
+        return {
+            "summary": {
+                "total_tests": len(self.test_results),
+                "overall_avg_time": sum(all_times) / len(all_times) if all_times else 0,
+                "overall_avg_score": sum(all_scores) / len(all_scores)
+                if all_scores
+                else 0,
+                "tests_meeting_target": sum(
+                    1 for test in self.test_results if test["timing"]["meets_target"]
+                ),
+            },
+            "test_results": self.test_results,
         }
 
-        return benchmark_results
 
-    async def _execute_test_case(self, test_data: Dict[str, Any]) -> None:
-        """Execute a single test case (placeholder for actual pipeline execution)."""
-        # Simulate pipeline execution
-        await asyncio.sleep(0.1)  # Placeholder
-        pass
-
-
-# Performance optimization utilities
 def create_optimized_pipeline_manager(
-    config: Dict[str, Any] = None,
+    config: Dict[str, Any],
 ) -> PipelinePerformanceManager:
-    """Factory function to create optimally configured performance manager."""
+    """Factory function to create optimized performance manager."""
     default_config = {
-        "enable_memory_tracking": True,
         "cache_size": 1000,
         "cache_ttl": 3600,
-        "max_workers": None,  # Auto-detect
-        "use_processes": False,
         "memory_limit_mb": 500,
+        "max_workers": 4,
         "target_total_time": 10.0,
         "target_stage_time": 3.0,
+        "enable_memory_tracking": True,
+        "enable_profiling": True,
     }
 
-    if config:
-        default_config.update(config)
+    # Merge with provided config
+    merged_config = {**default_config, **config}
 
-    return PipelinePerformanceManager(default_config)
+    return PipelinePerformanceManager(merged_config)
