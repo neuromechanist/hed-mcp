@@ -24,19 +24,19 @@ graph TD
     A[MCP Client<br/>Claude/AI] <--> B[HED MCP Server<br/>FastMCP]
     B <--> C[hed-python<br/>hedtools]
     D[BIDS Datasets<br/>Event Files] --> B
-    
+
     subgraph "MCP Server Components"
         E[Column Analysis<br/>Engine]
         F[HED Integration<br/>Wrapper]
         G[Sidecar Generation<br/>Pipeline]
         H[Validation<br/>Module]
     end
-    
+
     B <--> E
     B <--> F
     B <--> G
     B <--> H
-    
+
     D --> E
     F <--> C
     G <--> C
@@ -184,7 +184,7 @@ uv run ruff check src/ tests/
 # Add new dependency
 uv add package-name
 
-# Add development dependency  
+# Add development dependency
 uv add --dev package-name
 
 # Update dependencies
@@ -239,7 +239,7 @@ Claude: I'll analyze your event file and generate a HED sidecar template.
 
 [Uses analyze_event_columns tool]
 Based on the analysis:
-- onset, duration: timing columns (will skip)  
+- onset, duration: timing columns (will skip)
 - trial_type: categorical with ["go", "stop"] (good for HED)
 - response: categorical with ["left", "right"] (good for HED)
 
@@ -318,10 +318,10 @@ For questions about this project or HED integration, please:
 ## Links
 
 - **Homepage**: https://github.com/neuromechanist/hed-mcp
-- **Documentation**: https://github.com/neuromechanist/hed-mcp/blob/main/docs/ 
+- **Documentation**: https://github.com/neuromechanist/hed-mcp/blob/main/docs/
 - **Issues**: https://github.com/neuromechanist/hed-mcp/issues
 - **HED Tools**: https://github.com/hed-standard/hed-python
 
 ---
 
-*This project aims to make HED annotation more accessible to the neuroimaging research community through AI-powered automation while maintaining scientific rigor and standards compliance.* 
+*This project aims to make HED annotation more accessible to the neuroimaging research community through AI-powered automation while maintaining scientific rigor and standards compliance.*

@@ -455,4 +455,4 @@ After successful installation:
 Help us improve this installation guide:
 - Report installation issues on [GitHub](https://github.com/hed-standard/hed-mcp/issues)
 - Suggest improvements via pull requests
-- Share your installation experience with the community 
+- Share your installation experience with the community

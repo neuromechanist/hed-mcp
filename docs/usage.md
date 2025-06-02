@@ -186,9 +186,9 @@ for candidate in analysis['hed_candidates']:
 for candidate in analysis['hed_candidates']:
     column_name = candidate['column']
     column_data = events_df[column_name]
-    
+
     suggestions = await analyzer.suggest_hed_annotations(column_data, column_name)
-    
+
     print(f"\nHED suggestions for '{column_name}':")
     for suggestion in suggestions[:3]:  # Show first 3 suggestions
         print(f"  {suggestion['value']} -> {suggestion['suggested_hed']}")
@@ -260,13 +260,13 @@ await handler.save_json_file(sidecar, Path("events.json"))
 # Customize sidecar based on analysis
 analysis = await analyzer.analyze_events_file(events_path)
 high_priority_columns = [
-    c['column'] for c in analysis['hed_candidates'] 
+    c['column'] for c in analysis['hed_candidates']
     if c['priority'] == 'high'
 ]
 
 # Generate focused sidecar
 sidecar = await wrapper.generate_sidecar_template(
-    events_df, 
+    events_df,
     high_priority_columns
 )
 
@@ -306,7 +306,7 @@ import asyncio
 
 async def run_server():
     server = create_server()
-    
+
     # Setup and start server
     server.setup()
     await server.start("stdio")
@@ -444,24 +444,24 @@ async def analyze_bids_events(events_path: str):
     """Analyze BIDS events file for HED annotation readiness."""
     from hed_tools import create_column_analyzer
     from pathlib import Path
-    
+
     analyzer = create_column_analyzer()
     path = Path(events_path)
-    
+
     # Analyze the file
     analysis = await analyzer.analyze_events_file(path)
-    
+
     # Report findings
     print(f"File: {analysis['file_path']}")
     print(f"Rows: {analysis['file_info']['total_rows']}")
     print(f"Columns: {analysis['file_info']['total_columns']}")
     print(f"BIDS valid: {analysis['bids_compliance']['valid']}")
     print(f"HED candidates: {len(analysis['hed_candidates'])}")
-    
+
     # Show recommendations
     for rec in analysis['recommendations']:
         print(f"• {rec}")
-    
+
     return analysis
 
 # Usage
@@ -475,43 +475,43 @@ async def generate_complete_sidecar(events_path: str, output_path: str = None):
     """Generate a complete HED sidecar from events file."""
     from hed_tools import create_integration_suite
     from pathlib import Path
-    
+
     # Create all components
     suite = create_integration_suite()
     analyzer = suite['column_analyzer']
     wrapper = suite['hed_wrapper']
     handler = suite['file_handler']
-    
+
     events_path = Path(events_path)
     output_path = Path(output_path or events_path.with_suffix('.json'))
-    
+
     # Step 1: Analyze columns
     print("🔍 Analyzing events file...")
     analysis = await analyzer.analyze_events_file(events_path)
-    
+
     if not analysis['bids_compliance']['valid']:
         print("❌ BIDS validation failed:")
         for error in analysis['bids_compliance']['errors']:
             print(f"   {error}")
         return False
-    
+
     # Step 2: Load events data
     print("📂 Loading events data...")
     events_df = await handler.load_events_file(events_path)
-    
+
     # Step 3: Load HED schema
     print("📋 Loading HED schema...")
     await wrapper.load_schema()
-    
+
     # Step 4: Generate sidecar
     print("🏗️  Generating HED sidecar...")
     hed_columns = [c['column'] for c in analysis['hed_candidates']]
     sidecar = await wrapper.generate_sidecar_template(events_df, hed_columns)
-    
+
     # Step 5: Save sidecar
     print(f"💾 Saving sidecar to {output_path}...")
     success = await handler.save_json_file(sidecar, output_path)
-    
+
     if success:
         print(f"✅ Complete! Generated sidecar with {len(hed_columns)} HED columns.")
         return sidecar
@@ -533,9 +533,9 @@ async def process_multiple_events_files(file_paths: List[str]):
     """Process multiple events files in batch."""
     from hed_tools import create_integration_suite
     import asyncio
-    
+
     suite = create_integration_suite()
-    
+
     async def process_single_file(file_path):
         try:
             analysis = await suite['column_analyzer'].analyze_events_file(Path(file_path))
@@ -551,21 +551,21 @@ async def process_multiple_events_files(file_paths: List[str]):
                 'success': False,
                 'error': str(e)
             }
-    
+
     # Process files concurrently
     results = await asyncio.gather(*[
         process_single_file(path) for path in file_paths
     ])
-    
+
     # Summary report
     successful = [r for r in results if r['success']]
     failed = [r for r in results if not r['success']]
-    
+
     print(f"📊 Batch Processing Results:")
     print(f"   ✅ Successful: {len(successful)}")
     print(f"   ❌ Failed: {len(failed)}")
     print(f"   📋 Total HED candidates: {sum(r['hed_candidates'] for r in successful)}")
-    
+
     return results
 
 # Usage
@@ -607,7 +607,7 @@ analysis = await analyzer.analyze_events_file(filtered_df)
 class HEDProcessingManager:
     def __init__(self):
         self.wrapper = None
-        
+
     async def get_wrapper(self, schema_version="latest"):
         if self.wrapper is None:
             self.wrapper = create_hed_wrapper(schema_version)
@@ -627,15 +627,15 @@ from concurrent.futures import ThreadPoolExecutor
 async def parallel_analysis(file_paths: List[Path]):
     """Analyze multiple files in parallel."""
     loop = asyncio.get_event_loop()
-    
+
     with ThreadPoolExecutor(max_workers=4) as executor:
         tasks = [
             loop.run_in_executor(executor, analyze_single_file, path)
             for path in file_paths
         ]
-        
+
         results = await asyncio.gather(*tasks)
-    
+
     return results
 ```
 
@@ -652,7 +652,7 @@ info = hed_tools.get_package_info()
 
 if not info['components']['hed_wrapper']:
     print("HED wrapper not available - install hedtools")
-    
+
 if not info['components']['server']:
     print("Server not available - install fastmcp")
 ```
@@ -664,20 +664,20 @@ if not info['components']['server']:
 async def safe_load_events(file_path: Path):
     try:
         handler = create_file_handler()
-        
+
         # Validate file first
         if not handler.validate_file_format(file_path, ['.tsv', '.csv']):
             return None
-            
+
         # Load with fallback encoding
         try:
             df = await handler.load_events_file(file_path)
         except UnicodeDecodeError:
             # Try different encoding
             df = pd.read_csv(file_path, sep='\t', encoding='latin-1')
-            
+
         return df
-        
+
     except Exception as e:
         print(f"Failed to load {file_path}: {e}")
         return None
@@ -703,13 +703,13 @@ else:
 async def analyze_large_file(file_path: Path, max_rows: int = 50000):
     """Analyze large files by sampling."""
     df = await handler.load_events_file(file_path)
-    
+
     if len(df) > max_rows:
         # Sample the data
         sample_df = df.sample(n=max_rows, random_state=42)
         print(f"Analyzing sample of {max_rows} rows from {len(df)} total rows")
         df = sample_df
-    
+
     return await analyzer.analyze_events_file(df)
 ```
 
@@ -741,4 +741,4 @@ If you encounter issues:
 For additional support:
 - Review the [Installation Guide](installation.md)
 - Check [HED Integration documentation](hed_integration.md)
-- Open an issue on [GitHub](https://github.com/hed-standard/hed-mcp/issues) 
+- Open an issue on [GitHub](https://github.com/hed-standard/hed-mcp/issues)

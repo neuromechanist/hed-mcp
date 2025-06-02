@@ -67,7 +67,7 @@ graph TD
     D --> E[HED Schema]
     D --> F[TabularSummary]
     D --> G[Validation Tools]
-    
+
     H[BIDS Events] --> I[Column Analyzer]
     I --> C
     C --> J[Sidecar Generator]
@@ -227,7 +227,7 @@ for col_name, col_info in analysis['columns'].items():
 # Process only specific columns
 target_columns = ['trial_type', 'condition', 'response']
 sidecar = await wrapper.generate_sidecar_template(
-    events_df, 
+    events_df,
     columns_to_process=target_columns
 )
 ```
@@ -313,18 +313,18 @@ async def complete_hed_workflow(events_path: str):
     """Complete HED annotation workflow."""
     from hed_tools import create_integration_suite
     from pathlib import Path
-    
+
     # Initialize components
     suite = create_integration_suite()
     analyzer = suite['column_analyzer']
     wrapper = suite['hed_wrapper']
     handler = suite['file_handler']
-    
+
     events_path = Path(events_path)
     sidecar_path = events_path.with_suffix('.json')
-    
+
     print("🔍 Step 1: Analyzing BIDS events file...")
-    
+
     # Validate BIDS compliance
     bids_validation = await handler.validate_bids_events_structure(events_path)
     if not bids_validation['valid']:
@@ -332,68 +332,68 @@ async def complete_hed_workflow(events_path: str):
         for error in bids_validation['errors']:
             print(f"   {error}")
         return False
-    
+
     # Analyze columns
     analysis = await analyzer.analyze_events_file(events_path)
     hed_candidates = analysis['hed_candidates']
-    
+
     print(f"   Found {len(hed_candidates)} columns suitable for HED annotation")
-    
+
     print("📂 Step 2: Loading events data...")
     events_df = await handler.load_events_file(events_path)
-    
+
     print("📋 Step 3: Loading HED schema...")
     await wrapper.load_schema()
-    
+
     print("🏗️  Step 4: Generating HED sidecar template...")
-    
+
     # Extract column names for processing
     target_columns = [c['column'] for c in hed_candidates]
-    
+
     # Generate sidecar
     sidecar = await wrapper.generate_sidecar_template(
-        events_df, 
+        events_df,
         target_columns
     )
-    
+
     print("✨ Step 5: Enhancing sidecar with intelligent suggestions...")
-    
+
     # Add intelligent HED suggestions
     for candidate in hed_candidates:
         column_name = candidate['column']
         column_data = events_df[column_name]
-        
+
         # Get HED suggestions
         suggestions = await analyzer.suggest_hed_annotations(
-            column_data, 
+            column_data,
             column_name
         )
-        
+
         # Add suggestions to sidecar
         if column_name in sidecar and 'HED' in sidecar[column_name]:
             for suggestion in suggestions:
                 value = suggestion['value']
                 hed_annotation = suggestion['suggested_hed']
                 sidecar[column_name]['HED'][value] = hed_annotation
-    
+
     print("💾 Step 6: Saving HED sidecar...")
     success = await handler.save_json_file(sidecar, sidecar_path)
-    
+
     if success:
         print("✅ Step 7: Validating generated annotations...")
-        
+
         # Validate the generated sidecar
         validation = await wrapper.validate_events(events_df, sidecar)
-        
+
         print(f"   Validation: {'✅ Passed' if validation['valid'] else '❌ Failed'}")
         print(f"   Events processed: {validation['statistics']['total_events']}")
         print(f"   HED tags: {validation['statistics']['hed_tags_found']}")
-        
+
         if validation['errors']:
             print("   Validation errors:")
             for error in validation['errors'][:5]:  # Show first 5 errors
                 print(f"     - {error}")
-        
+
         print(f"🎉 Complete! HED sidecar saved to: {sidecar_path}")
         return sidecar
     else:
@@ -471,11 +471,11 @@ async def validated_workflow():
     # 1. Validate BIDS structure
     bids_validation = await handler.validate_bids_events_structure(events_path)
     assert bids_validation['valid'], "BIDS validation failed"
-    
+
     # 2. Validate schema loading
     schema_loaded = await wrapper.load_schema()
     assert schema_loaded, "Schema loading failed"
-    
+
     # 3. Validate generated sidecar
     validation = await wrapper.validate_events(events_df, sidecar)
     assert validation['valid'], f"HED validation failed: {validation['errors']}"
@@ -488,12 +488,12 @@ async def validated_workflow():
 async def optimize_for_large_datasets(events_path: Path):
     # Sample large files for analysis
     df = await handler.load_events_file(events_path)
-    
+
     if len(df) > 10000:
         # Use representative sample for column analysis
         sample_df = df.sample(n=5000, random_state=42)
         analysis = await analyzer.analyze_events_file(sample_df)
-        
+
         # Apply results to full dataset
         target_columns = [c['column'] for c in analysis['hed_candidates']]
         sidecar = await wrapper.generate_sidecar_template(df, target_columns)
@@ -501,7 +501,7 @@ async def optimize_for_large_datasets(events_path: Path):
         # Process normally for smaller files
         analysis = await analyzer.analyze_events_file(df)
         sidecar = await wrapper.generate_sidecar_template(df)
-    
+
     return sidecar
 ```
 
@@ -534,14 +534,14 @@ for column, values in custom_annotations.items():
 # Support multiple schema versions
 async def multi_schema_validation(events_df, sidecar):
     results = {}
-    
+
     for version in ['8.0.0', '8.1.0', '8.2.0']:
         wrapper = create_hed_wrapper(schema_version=version)
         await wrapper.load_schema()
-        
+
         validation = await wrapper.validate_events(events_df, sidecar)
         results[version] = validation['valid']
-    
+
     return results
 ```
 
@@ -557,18 +557,18 @@ class IntelligentHEDSuggester:
             'words': 'Sensory-event/Auditory/Word',
             'tones': 'Sensory-event/Auditory/Tone'
         }
-    
+
     async def suggest_enhanced_hed(self, column_name: str, value: str) -> str:
         """Generate enhanced HED suggestions using domain knowledge."""
         base_suggestion = await self._get_base_suggestion(column_name, value)
-        
+
         # Add domain-specific enhancements
         if 'stimulus' in column_name.lower():
             base_suggestion += f", {self._get_stimulus_category(value)}"
-        
+
         if 'response' in column_name.lower():
             base_suggestion += f", Agent-action/Press"
-        
+
         return base_suggestion
 ```
 
@@ -578,7 +578,7 @@ class IntelligentHEDSuggester:
 
 #### 1. Schema Loading Failures
 
-**Symptoms**: 
+**Symptoms**:
 - `schema_loaded = False`
 - Empty schema info
 
@@ -634,7 +634,7 @@ if not validation['valid']:
     print("Validation errors:")
     for i, error in enumerate(validation['errors'][:10]):
         print(f"{i+1}. {error}")
-    
+
     # Check specific HED strings
     for column in sidecar:
         if 'HED' in sidecar[column]:
@@ -654,24 +654,24 @@ import time
 
 async def timed_processing(events_path: Path):
     start_time = time.time()
-    
+
     # Column analysis timing
     analysis_start = time.time()
     analysis = await analyzer.analyze_events_file(events_path)
     analysis_time = time.time() - analysis_start
-    
+
     # Sidecar generation timing
     sidecar_start = time.time()
     sidecar = await wrapper.generate_sidecar_template(events_df)
     sidecar_time = time.time() - sidecar_start
-    
+
     total_time = time.time() - start_time
-    
+
     print(f"Performance Report:")
     print(f"  Column analysis: {analysis_time:.2f}s")
     print(f"  Sidecar generation: {sidecar_time:.2f}s")
     print(f"  Total time: {total_time:.2f}s")
-    
+
     return sidecar
 ```
 
@@ -689,4 +689,4 @@ For HED integration issues:
 - **HED Online Tools**: [HED Online](https://hedtools.org/)
 - **BIDS Validator**: [BIDS Validator](https://bids-standard.github.io/bids-validator/)
 - **HED Examples**: [HED Examples Repository](https://github.com/hed-standard/hed-examples)
-- **hedtools Documentation**: [hedtools API](https://hed-python.readthedocs.io/) 
+- **hedtools Documentation**: [hedtools API](https://hed-python.readthedocs.io/)

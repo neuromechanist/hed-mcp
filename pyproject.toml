@@ -12,7 +12,7 @@ maintainers = [
 ]
 keywords = [
     "hed",
-    "hierarchical-event-descriptors", 
+    "hierarchical-event-descriptors",
     "mcp",
     "model-context-protocol",
     "bids",
