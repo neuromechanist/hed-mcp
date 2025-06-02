@@ -72,7 +72,7 @@ Based on the proven `extract_json_template.ipynb` workflow:
 
 ### Dependencies
 - **hedtools** ≥0.5.0 - Official HED Python tools
-- **mcp** ≥1.0.0 - Model Context Protocol framework
+- **mcp** ≥1.9.0 - Model Context Protocol framework
 - **pandas** ≥2.0.0 - Data manipulation
 - **numpy** ≥1.24.0 - Numerical operations
 
@@ -88,17 +88,16 @@ Based on the proven `extract_json_template.ipynb` workflow:
 - Cross-platform support (Windows, macOS, Linux)
 - No local path dependencies - fully distributable
 
-## Development Resources
+## Development Setup
 
-This project builds upon established patterns and references:
+### Prerequisites
 
-- **HED-Python Repository**: Integration with official hedtools package
-- **MCP Python SDK**: FastMCP server implementation patterns
-- **Reference Workflow**: Based on `extract_json_template.ipynb` from hed-examples
+- Python 3.10 or higher
+- [uv](https://docs.astral.sh/uv/) for dependency management
 
-## Installation (Coming Soon)
+### Installation & Setup
 
-### Using uv (Recommended)
+#### Using uv (Recommended)
 
 First, install uv if you haven't already:
 
@@ -113,7 +112,91 @@ powershell -c "irm https://astral.sh/uv/install.ps1 | iex"
 pip install uv
 ```
 
-Then install the HED MCP server:
+#### Development Setup
+
+```bash
+# Clone the repository
+git clone https://github.com/hed-standard/hed-mcp.git
+cd hed-mcp
+
+# Set up development environment with uv
+uv sync --dev
+```
+
+This command will:
+- Create a virtual environment in `.venv/`
+- Install all project and development dependencies
+- Generate `uv.lock` for reproducible builds
+- Install the package in editable mode
+
+#### Activate the environment
+
+```bash
+source .venv/bin/activate
+```
+
+Or use uv directly without activation:
+```bash
+uv run python script.py
+uv run pytest
+```
+
+### Project Structure
+
+```
+hed-mcp/
+├── src/hed_tools/     # Main package
+│   ├── server/                   # MCP server components
+│   ├── tools/                    # Analysis tools & MCP tools
+│   ├── hed_integration/         # HED-specific functionality
+│   └── utils/                   # General utilities
+├── tests/                       # Test suite
+│   ├── unit/                    # Unit tests
+│   └── integration/             # Integration tests
+├── docs/                        # Documentation
+│   ├── api/                     # API documentation
+│   ├── user_guide/             # User guides
+│   └── examples/               # Usage examples
+├── pyproject.toml              # Project configuration
+├── uv.lock                     # Dependency lock file
+└── README.md                   # This file
+```
+
+### Common Development Commands
+
+```bash
+# Run tests
+uv run pytest
+
+# Run with coverage
+uv run pytest --cov=src/hed_tools
+
+# Code formatting
+uv run black src/ tests/
+uv run isort src/ tests/
+
+# Type checking
+uv run mypy src/
+
+# Linting
+uv run ruff check src/ tests/
+
+# Add new dependency
+uv add package-name
+
+# Add development dependency  
+uv add --dev package-name
+
+# Update dependencies
+uv sync --upgrade
+
+# Run the server (when implemented)
+uv run python -m hed_tools.server
+```
+
+## Installation (Coming Soon)
+
+### From PyPI (When Available)
 
 ```bash
 # Install from PyPI (when available)
@@ -131,20 +214,6 @@ uv pip install hed-mcp-server
 pip install hed-mcp-server
 ```
 
-### Development Setup (Coming Soon)
-
-```bash
-# Clone the repository
-git clone https://github.com/your-org/hed-mcp.git
-cd hed-mcp
-
-# Set up development environment with uv
-uv sync
-
-# Run the server
-uv run python -m hed_mcp.server
-```
-
 ## Usage Examples (Coming Soon)
 
 ### With Claude Desktop
@@ -154,7 +223,7 @@ uv run python -m hed_mcp.server
   "mcpServers": {
     "hed-mcp": {
       "command": "uv",
-      "args": ["run", "python", "-m", "hed_mcp.server"],
+      "args": ["run", "python", "-m", "hed_tools.server"],
       "cwd": "/path/to/hed-mcp"
     }
   }
@@ -178,19 +247,60 @@ Based on the analysis:
 Here's your validated HED sidecar template...
 ```
 
+## Development Resources
+
+This project builds upon established patterns and references:
+
+- **HED-Python Repository**: Integration with official hedtools package
+- **MCP Python SDK**: FastMCP server implementation patterns
+- **Reference Workflow**: Based on `extract_json_template.ipynb` from hed-examples
+
 ## Contributing
 
 We welcome contributions! This project follows modern Python development practices:
 
-- **Code Style**: Black + isort formatting
+### Development Standards
+
+- **Code Style**: Black + isort formatting (88 character line length)
 - **Testing**: pytest with comprehensive coverage
-- **Documentation**: mkdocs with Material theme
+- **Type Checking**: mypy for static type analysis
+- **Linting**: ruff for fast Python linting
+- **Documentation**: Sphinx with RTD theme
 - **Packaging**: uv for dependency management
 - **CI/CD**: GitHub Actions for automated testing and deployment
 
+### Contributing Workflow
+
+1. Fork the repository
+2. Create a feature branch: `git checkout -b feature-name`
+3. Set up development environment: `uv sync --dev`
+4. Make your changes
+5. Run tests: `uv run pytest`
+6. Format code: `uv run black . && uv run isort .`
+7. Type check: `uv run mypy src/`
+8. Lint: `uv run ruff check .`
+9. Commit changes: `git commit -m "feat: description"`
+10. Push to the branch: `git push origin feature-name`
+11. Submit a pull request
+
+### Testing
+
+```bash
+# Run all tests
+uv run pytest
+
+# Run with coverage report
+uv run pytest --cov=src/hed_tools --cov-report=html
+
+# Run specific test categories
+uv run pytest -m unit
+uv run pytest -m integration
+uv run pytest -m slow
+```
+
 ## License
 
-This project is licensed under the BSD 3-Clause License - see the [LICENSE](LICENSE) file for details.
+This project is licensed under the BSD-3-Clause License - see the [LICENSE](LICENSE) file for details.
 
 ## Acknowledgments
 
@@ -204,6 +314,13 @@ For questions about this project or HED integration, please:
 - Open an issue on GitHub
 - Refer to the HED documentation at [hed-specification.org](https://hed-specification.org)
 - Consult the BIDS specification at [bids-specification.org](https://bids-specification.org)
+
+## Links
+
+- **Homepage**: https://github.com/neuromechanist/hed-mcp
+- **Documentation**: https://github.com/neuromechanist/hed-mcp/blob/main/docs/ 
+- **Issues**: https://github.com/neuromechanist/hed-mcp/issues
+- **HED Tools**: https://github.com/hed-standard/hed-python
 
 ---
 
