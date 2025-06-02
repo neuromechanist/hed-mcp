@@ -8,7 +8,7 @@ a unified interface for BIDS event file analysis.
 import asyncio
 import logging
 import time
-from dataclasses import dataclass, field
+from dataclasses import dataclass
 from pathlib import Path
 from typing import Any, Dict, List, Optional, Union
 
@@ -17,33 +17,49 @@ import pandas as pd
 from .bids_parser import BIDSEventParser
 from .enhanced_column_analyzer import EnhancedColumnAnalyzer, analyze_columns_enhanced
 from .llm_preprocessor import create_llm_preprocessor, SamplingConfig
+from .performance_optimizer import (
+    MemoryManager,
+    ChunkedProcessor,
+    LazyDataLoader,
+    ParallelProcessor,
+    PerformanceBenchmark,
+    create_optimized_config,
+    optimize_for_large_datasets,
+)
 
 
 @dataclass
 class AnalysisConfig:
-    """Configuration for column analysis engine."""
+    """Configuration for BIDS column analysis."""
 
     # Processing options
-    max_workers: int = 4
-    chunk_size: int = 10000
+    enable_enhanced_analysis: bool = True
+    enable_llm_preprocessing: bool = True
     enable_caching: bool = True
+    parallel_processing: bool = False
+    max_workers: Optional[int] = None
 
-    # Analysis depth options
-    enable_statistical_analysis: bool = True
-    enable_pattern_recognition: bool = True
-    enable_hed_detection: bool = True
+    # Performance optimization options
+    enable_memory_optimization: bool = True
+    enable_chunked_processing: bool = True
+    enable_lazy_loading: bool = True
+    enable_performance_benchmarking: bool = False
+    memory_limit_gb: float = 2.0
+    chunk_size: int = 10000
+    memory_aggressive: bool = False
+
+    # Analysis options
+    sampling_config: Optional[SamplingConfig] = None
 
     # Output options
     output_format: str = "json"  # json, csv, pickle
-    include_detailed_stats: bool = True
-    include_sample_data: bool = True
+    include_metadata: bool = True
+    save_intermediate_results: bool = False
 
-    # LLM preprocessing options
-    sampling_config: SamplingConfig = field(default_factory=SamplingConfig)
-
-    # Progress tracking
-    enable_progress_tracking: bool = True
-    progress_callback: Optional[callable] = None
+    def __post_init__(self):
+        """Initialize sampling config if not provided."""
+        if self.sampling_config is None:
+            self.sampling_config = SamplingConfig()
 
 
 @dataclass
@@ -102,22 +118,62 @@ class BIDSColumnAnalysisEngine:
     - LLMPreprocessor for LLM-ready data preparation
     """
 
-    def __init__(self, config: Optional[AnalysisConfig] = None):
-        """Initialize the analysis engine.
-
-        Args:
-            config: Configuration options for the analysis engine
-        """
-        self.config = config or AnalysisConfig()
+    def __init__(self, config: AnalysisConfig):
+        """Initialize the analysis engine with performance optimizations."""
+        self.config = config
         self.logger = logging.getLogger(__name__)
 
-        # Initialize components
+        # Initialize performance optimization components
+        if self.config.enable_memory_optimization:
+            optimization_settings = optimize_for_large_datasets(
+                enable_chunking=self.config.enable_chunked_processing,
+                enable_parallel=self.config.parallel_processing,
+                memory_aggressive=self.config.memory_aggressive,
+            )
+
+            self._memory_manager = MemoryManager(
+                memory_threshold=optimization_settings["memory_threshold"],
+                cleanup_threshold=optimization_settings["cleanup_threshold"],
+                gc_frequency=optimization_settings["gc_frequency"],
+            )
+        else:
+            self._memory_manager = MemoryManager()
+
+        # Initialize chunked processor
+        if self.config.enable_chunked_processing:
+            chunk_config, parallel_config = create_optimized_config(
+                memory_limit_gb=self.config.memory_limit_gb,
+                max_workers=self.config.max_workers,
+                chunk_size=self.config.chunk_size,
+            )
+            self._chunked_processor = ChunkedProcessor(
+                chunk_config, self._memory_manager
+            )
+
+            if self.config.parallel_processing:
+                self._parallel_processor = ParallelProcessor(
+                    parallel_config, self._memory_manager
+                )
+        else:
+            self._chunked_processor = None
+            self._parallel_processor = None
+
+        # Initialize lazy loader
+        if self.config.enable_lazy_loading:
+            self._lazy_loader = LazyDataLoader(self._memory_manager)
+        else:
+            self._lazy_loader = None
+
+        # Initialize performance benchmarking
+        if self.config.enable_performance_benchmarking:
+            self._benchmark = PerformanceBenchmark(self._memory_manager)
+        else:
+            self._benchmark = None
+
+        # Initialize core components
         self._parser = BIDSEventParser()
         self._analyzer = EnhancedColumnAnalyzer()
         self._preprocessor = create_llm_preprocessor(self.config.sampling_config)
-
-        # Results cache
-        self._results_cache: Dict[str, FileAnalysisResult] = {}
 
         # Performance tracking
         self._performance_metrics = {
@@ -125,82 +181,252 @@ class BIDSColumnAnalysisEngine:
             "total_processing_time": 0.0,
             "cache_hits": 0,
             "cache_misses": 0,
+            "memory_optimizations": 0,
+            "chunks_processed": 0,
         }
 
-    async def analyze_file(self, file_path: Path) -> FileAnalysisResult:
-        """Analyze a single BIDS event file."""
-        start_time = time.time()
+        # Results cache
+        self._results_cache = {} if self.config.enable_caching else None
 
-        try:
-            # Check if file exists first
-            if not file_path.exists():
+    async def analyze_file(self, file_path: Path) -> FileAnalysisResult:
+        """Analyze a single BIDS event file with performance optimizations."""
+
+        # Use benchmarking if enabled
+        if self._benchmark:
+            with self._benchmark.benchmark(f"analyze_file_{file_path.name}", 1):
+                return await self._analyze_file_internal(file_path)
+        else:
+            return await self._analyze_file_internal(file_path)
+
+    async def _analyze_file_internal(self, file_path: Path) -> FileAnalysisResult:
+        """Internal file analysis with memory management."""
+
+        with self._memory_manager.memory_guard(f"analyzing {file_path.name}"):
+            start_time = time.time()
+
+            try:
+                # Check if file exists first
+                if not file_path.exists():
+                    return FileAnalysisResult(
+                        file_path=file_path,
+                        success=False,
+                        error_message=f"File not found: {file_path}",
+                        processing_time=time.time() - start_time,
+                    )
+
+                # Check cache first
+                if self._results_cache is not None:
+                    cache_key = self._get_cache_key(file_path)
+                    if cache_key in self._results_cache:
+                        self._performance_metrics["cache_hits"] += 1
+                        cached_result = self._results_cache[cache_key]
+                        self.logger.debug(f"Cache hit for {file_path.name}")
+                        return cached_result
+                    else:
+                        self._performance_metrics["cache_misses"] += 1
+
+                # Check if file is large and needs chunked processing
+                file_size_mb = file_path.stat().st_size / (1024**2)
+
+                if (
+                    self._chunked_processor
+                    and file_size_mb > 100  # Files larger than 100MB
+                    and self.config.enable_chunked_processing
+                ):
+                    return await self._analyze_large_file_chunked(file_path, start_time)
+                else:
+                    return await self._analyze_standard_file(file_path, start_time)
+
+            except Exception as e:
+                self.logger.error(f"Error analyzing {file_path}: {e}")
                 return FileAnalysisResult(
                     file_path=file_path,
                     success=False,
-                    error_message=f"File not found: {file_path}",
+                    error_message=str(e),
                     processing_time=time.time() - start_time,
                 )
-
-            # Check cache first
-            cache_key = self._get_cache_key(file_path)
-            if self.config.enable_caching and cache_key in self._results_cache:
-                self._performance_metrics["cache_hits"] += 1
-                return self._results_cache[cache_key]
-
-            self._performance_metrics["cache_misses"] += 1
-
-            # Parse the file
-            events_data = await self._parse_file(file_path)
-
-            # Perform enhanced analysis if enabled
-            enhanced_analysis = None
-            if self.config.enable_statistical_analysis:
-                enhanced_analysis = await self._perform_enhanced_analysis(
-                    events_data.events_df
+            finally:
+                # Update performance tracking
+                self._performance_metrics["files_processed"] += 1
+                self._performance_metrics["total_processing_time"] += (
+                    time.time() - start_time
                 )
 
-            # Prepare for LLM if enabled
-            llm_samples = None
-            if self.config.enable_hed_detection:
-                llm_samples = self._prepare_for_llm(events_data.events_df)
+    async def _analyze_standard_file(
+        self, file_path: Path, start_time: float
+    ) -> FileAnalysisResult:
+        """Analyze a standard-sized file."""
 
-            # Create result
-            processing_time = time.time() - start_time
-            result = FileAnalysisResult(
-                file_path=file_path,
-                success=True,
-                file_size=file_path.stat().st_size,
-                row_count=len(events_data.events_df),
-                column_count=len(events_data.events_df.columns),
-                bids_compliance=events_data.validation_results,
-                column_info=events_data.column_info,
-                enhanced_analysis=enhanced_analysis,
-                llm_preprocessed=llm_samples,
-                processing_time=processing_time,
-            )
+        # Parse BIDS events
+        events_data = await self._parse_file(file_path)
 
-            # Update performance metrics
-            self._performance_metrics["files_processed"] += 1
-            self._performance_metrics["total_processing_time"] += processing_time
+        # Optimize DataFrame memory usage
+        events_data.events_df = self._memory_manager.optimize_dataframe(
+            events_data.events_df, inplace=True
+        )
 
-            # Cache result
-            if self.config.enable_caching:
-                self._results_cache[cache_key] = result
+        # Perform enhanced analysis if enabled
+        enhanced_analysis = None
+        if self.config.enable_enhanced_analysis:
+            try:
+                # Run enhanced analysis asynchronously for chunks
+                enhanced_result = await self._analyzer.analyze_dataframe(
+                    events_data.events_df
+                )
+                enhanced_analysis = enhanced_result
+            except Exception as e:
+                self.logger.warning(f"Enhanced analysis failed for file: {e}")
 
-            return result
+        # Prepare for LLM if enabled
+        llm_samples = None
+        if self.config.enable_llm_preprocessing:
+            llm_samples = self._prepare_for_llm(events_data.events_df)
 
-        except Exception as e:
-            processing_time = time.time() - start_time
-            # Still update metrics even for failed files
-            self._performance_metrics["files_processed"] += 1
-            self._performance_metrics["total_processing_time"] += processing_time
+        # Create result
+        result = FileAnalysisResult(
+            file_path=file_path,
+            success=True,
+            file_size=file_path.stat().st_size,
+            row_count=len(events_data.events_df),
+            column_count=len(events_data.events_df.columns),
+            bids_compliance=events_data.validation_results,
+            column_info=events_data.column_info,
+            enhanced_analysis=enhanced_analysis,
+            llm_preprocessed=llm_samples,
+            processing_time=time.time() - start_time,
+        )
 
-            return FileAnalysisResult(
-                file_path=file_path,
-                success=False,
-                error_message=str(e),
-                processing_time=processing_time,
-            )
+        # Cache result if caching is enabled
+        if self._results_cache is not None:
+            cache_key = self._get_cache_key(file_path)
+            self._results_cache[cache_key] = result
+
+        return result
+
+    async def _analyze_large_file_chunked(
+        self, file_path: Path, start_time: float
+    ) -> FileAnalysisResult:
+        """Analyze a large file using chunked processing."""
+
+        self.logger.info(
+            f"Processing large file {file_path.name} with chunked processing"
+        )
+
+        chunk_results = []
+        total_rows = 0
+        combined_enhanced_analysis = {}
+        combined_llm_samples = {}
+
+        # Process file in chunks
+        for chunk_result in self._chunked_processor.process_file_chunks(
+            file_path, self._process_dataframe_chunk
+        ):
+            chunk_results.append(chunk_result)
+            total_rows += len(chunk_result.get("events_df", pd.DataFrame()))
+
+            # Combine enhanced analysis results
+            if chunk_result.get("enhanced_analysis"):
+                self._merge_enhanced_analysis(
+                    combined_enhanced_analysis, chunk_result["enhanced_analysis"]
+                )
+
+            # Combine LLM preprocessing results
+            if chunk_result.get("llm_samples"):
+                combined_llm_samples.update(chunk_result["llm_samples"])
+
+            self._performance_metrics["chunks_processed"] += 1
+
+        # Create combined result
+        result = FileAnalysisResult(
+            file_path=file_path,
+            success=True,
+            file_size=file_path.stat().st_size,
+            row_count=total_rows,
+            column_count=len(chunk_results[0].get("events_df", pd.DataFrame()).columns)
+            if chunk_results
+            else 0,
+            bids_compliance=chunk_results[0].get("validation_results", {})
+            if chunk_results
+            else {},
+            column_info=chunk_results[0].get("column_info", {})
+            if chunk_results
+            else {},
+            enhanced_analysis=combined_enhanced_analysis,
+            llm_preprocessed=combined_llm_samples,
+            processing_time=time.time() - start_time,
+        )
+
+        return result
+
+    def _process_dataframe_chunk(self, chunk_df: pd.DataFrame) -> Dict[str, Any]:
+        """Process a single DataFrame chunk."""
+
+        # Optimize chunk memory
+        chunk_df = self._memory_manager.optimize_dataframe(chunk_df, inplace=True)
+
+        # Analyze chunk
+        result = {"events_df": chunk_df}
+
+        # Enhanced analysis if enabled
+        if self.config.enable_enhanced_analysis:
+            try:
+                # Use the analyze_columns_enhanced function for chunks (async)
+                import asyncio
+
+                if asyncio.iscoroutinefunction(analyze_columns_enhanced):
+                    enhanced_result = asyncio.run(analyze_columns_enhanced(chunk_df))
+                else:
+                    enhanced_result = analyze_columns_enhanced(chunk_df)
+                result["enhanced_analysis"] = enhanced_result
+            except Exception as e:
+                self.logger.warning(f"Enhanced analysis failed for chunk: {e}")
+
+        # LLM preprocessing if enabled
+        if self.config.enable_llm_preprocessing:
+            try:
+                llm_result = self._preprocessor.process_dataframe(chunk_df)
+                result["llm_samples"] = llm_result
+            except Exception as e:
+                self.logger.warning(f"LLM preprocessing failed for chunk: {e}")
+
+        return result
+
+    def _merge_enhanced_analysis(
+        self, combined: Dict[str, Any], chunk_analysis: Dict[str, Any]
+    ):
+        """Merge enhanced analysis results from multiple chunks."""
+
+        if not combined:
+            combined.update(chunk_analysis)
+            return
+
+        # Merge type distributions
+        if "type_distribution" in chunk_analysis:
+            if "type_distribution" not in combined:
+                combined["type_distribution"] = {}
+            for col_type, count in chunk_analysis["type_distribution"].items():
+                combined["type_distribution"][col_type] = (
+                    combined["type_distribution"].get(col_type, 0) + count
+                )
+
+        # Merge HED candidates (avoid duplicates)
+        if "hed_candidates" in chunk_analysis:
+            if "hed_candidates" not in combined:
+                combined["hed_candidates"] = []
+
+            existing_columns = {c["column"] for c in combined["hed_candidates"]}
+            for candidate in chunk_analysis["hed_candidates"]:
+                if candidate["column"] not in existing_columns:
+                    combined["hed_candidates"].append(candidate)
+
+        # Merge other metrics as needed
+        for key in ["bids_compliance_score", "data_quality_score"]:
+            if key in chunk_analysis:
+                if key not in combined:
+                    combined[key] = chunk_analysis[key]
+                else:
+                    # Average the scores
+                    combined[key] = (combined[key] + chunk_analysis[key]) / 2
 
     async def analyze_batch(
         self, file_paths: List[Union[str, Path]]
@@ -231,39 +457,21 @@ class BIDSColumnAnalysisEngine:
 
             tasks = [analyze_with_semaphore(fp) for fp in file_paths]
 
-            # Process with progress tracking
-            if self.config.enable_progress_tracking:
-                for i, task in enumerate(asyncio.as_completed(tasks)):
-                    result = await task
-                    file_results.append(result)
-
-                    if self.config.progress_callback:
-                        await self.config.progress_callback(
-                            i + 1, len(file_paths), result.file_path.name
-                        )
-            else:
-                file_results = await asyncio.gather(*tasks, return_exceptions=True)
-                # Convert exceptions to failed results
-                for i, result in enumerate(file_results):
-                    if isinstance(result, Exception):
-                        file_results[i] = FileAnalysisResult(
-                            file_path=file_paths[i],
-                            success=False,
-                            error_message=str(result),
-                        )
+            # Process all tasks concurrently
+            file_results = await asyncio.gather(*tasks, return_exceptions=True)
+            # Convert exceptions to failed results
+            for i, result in enumerate(file_results):
+                if isinstance(result, Exception):
+                    file_results[i] = FileAnalysisResult(
+                        file_path=file_paths[i],
+                        success=False,
+                        error_message=str(result),
+                    )
         else:
             # Sequential processing
             for i, file_path in enumerate(file_paths):
                 result = await self.analyze_file(file_path)
                 file_results.append(result)
-
-                if (
-                    self.config.enable_progress_tracking
-                    and self.config.progress_callback
-                ):
-                    await self.config.progress_callback(
-                        i + 1, len(file_paths), file_path.name
-                    )
 
         # Compile batch results
         successful_results = [r for r in file_results if r.success]
@@ -460,7 +668,7 @@ class BIDSColumnAnalysisEngine:
 
     async def _parse_file(self, file_path: Path):
         """Parse BIDS event file."""
-        return await self._parser.parse_events_file_async(file_path)
+        return await self._parser.parse_file_async(file_path)
 
     async def _perform_enhanced_analysis(self, df: pd.DataFrame) -> Dict[str, Any]:
         """Perform enhanced column analysis."""
@@ -615,6 +823,8 @@ def create_analysis_engine(
     Returns:
         Configured BIDSColumnAnalysisEngine instance
     """
+    if config is None:
+        config = AnalysisConfig()
     return BIDSColumnAnalysisEngine(config)
 
 

@@ -1,7 +1,4 @@
-"""Tools and utilities for HED integration.
-
-This module contains various tools for analyzing and processing HED data.
-"""
+"""HED Tools package - Advanced tools for working with HED (Hierarchical Event Descriptor) data."""
 
 from .bids_parser import (
     BIDSEventParser,
@@ -10,6 +7,10 @@ from .bids_parser import (
 )
 from .enhanced_column_analyzer import (
     EnhancedColumnAnalyzer,
+    NumericColumnAnalyzer,
+    CategoricalColumnAnalyzer,
+    TemporalColumnAnalyzer,
+    TextColumnAnalyzer,
     analyze_columns_enhanced,
 )
 from .llm_preprocessor import (
@@ -29,6 +30,19 @@ from .column_analysis_engine import (
     analyze_bids_files,
     analyze_bids_directory,
 )
+from .performance_optimizer import (
+    MemoryManager,
+    ChunkedProcessor,
+    LazyDataLoader,
+    ParallelProcessor,
+    PerformanceBenchmark,
+    MemoryMetrics,
+    PerformanceMetrics,
+    ChunkProcessingConfig,
+    ParallelProcessingConfig,
+    create_optimized_config,
+    optimize_for_large_datasets,
+)
 from .cli import cli_main
 
 __all__ = [
@@ -38,6 +52,10 @@ __all__ = [
     "parse_bids_events",
     # Enhanced Analysis
     "EnhancedColumnAnalyzer",
+    "NumericColumnAnalyzer",
+    "CategoricalColumnAnalyzer",
+    "TemporalColumnAnalyzer",
+    "TextColumnAnalyzer",
     "analyze_columns_enhanced",
     # LLM Preprocessor
     "LLMPreprocessor",
@@ -54,6 +72,18 @@ __all__ = [
     "create_analysis_engine",
     "analyze_bids_files",
     "analyze_bids_directory",
+    # Performance Optimizer
+    "MemoryManager",
+    "ChunkedProcessor",
+    "LazyDataLoader",
+    "ParallelProcessor",
+    "PerformanceBenchmark",
+    "MemoryMetrics",
+    "PerformanceMetrics",
+    "ChunkProcessingConfig",
+    "ParallelProcessingConfig",
+    "create_optimized_config",
+    "optimize_for_large_datasets",
     # CLI
     "cli_main",
 ]
