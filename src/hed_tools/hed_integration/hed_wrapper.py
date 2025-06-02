@@ -32,7 +32,6 @@ from .models import (
     OperationResult,
     EventsData,
     ColumnInfo,
-    SchemaInfo,
 )
 from .schema import SchemaHandler
 from .tabular_summary import create_tabular_summary_wrapper
@@ -57,7 +56,7 @@ class HEDWrapper:
             config: Configuration object for wrapper behavior
         """
         self.config = config or HEDWrapperConfig()
-        self.schema_handler = SchemaHandler(self.config.hed_schema)
+        self._schema_handler = SchemaHandler(self.config.hed_schema)
         self._initialized = False
 
         # Initialize TabularSummary wrapper
@@ -76,12 +75,12 @@ class HEDWrapper:
             return OperationResult(success=True, processing_time=0.0)
 
         start_time = time.time()
-        result = await self.schema_handler.load_schema()
+        result = await self._schema_handler.load_schema()
 
         if result.success:
             # Initialize TabularSummary wrapper with schema handler
             self._tabular_summary_wrapper = create_tabular_summary_wrapper(
-                config=self.config.tabular_summary, schema_handler=self.schema_handler
+                config=self.config.tabular_summary, schema_handler=self._schema_handler
             )
             self._initialized = True
             logger.info("HED wrapper initialized successfully")
@@ -107,11 +106,11 @@ class HEDWrapper:
         Returns:
             OperationResult with schema loading details
         """
-        result = await self.schema_handler.load_schema(version, custom_path)
+        result = await self._schema_handler.load_schema(version, custom_path)
 
         # Update TabularSummary wrapper if schema loaded successfully
         if result.success and self._tabular_summary_wrapper:
-            self._tabular_summary_wrapper.schema_handler = self.schema_handler
+            self._tabular_summary_wrapper.schema_handler = self._schema_handler
 
         return result
 
@@ -431,7 +430,7 @@ class HEDWrapper:
         Returns:
             List of schema information dictionaries
         """
-        return self.schema_handler.get_available_schemas()
+        return self._schema_handler.get_available_schemas()
 
     def parse_hed_string(self, hed_string: str) -> Dict[str, Any]:
         """Parse a HED string and return structured information.
@@ -475,13 +474,31 @@ class HEDWrapper:
                 "errors": [str(e)],
             }
 
-    def get_schema_info(self) -> SchemaInfo:
-        """Get information about the currently loaded schema.
+    def get_schema_info(self) -> Dict[str, Any]:
+        """Get information about currently loaded schema.
 
         Returns:
-            SchemaInfo object with schema details
+            Dictionary containing schema information
         """
-        return self.schema_handler.get_schema_info()
+        if self._schema_handler:
+            schema_info = self._schema_handler.get_schema_info()
+            return {
+                "version": schema_info.version,
+                "loaded": schema_info.loaded,
+                "path": str(schema_info.path) if schema_info.path else None,
+                "tag_count": schema_info.tag_count,
+                "description": schema_info.description,
+                "library_schemas": schema_info.library_schemas,
+            }
+        else:
+            return {
+                "version": "none",
+                "loaded": False,
+                "path": None,
+                "tag_count": 0,
+                "description": "",
+                "library_schemas": [],
+            }
 
     async def analyze_events_data(
         self, events_data: Union[pd.DataFrame, Path]
@@ -528,7 +545,7 @@ class HEDWrapper:
         metrics.update(
             {
                 "initialized": self._initialized,
-                "schema_loaded": self.schema_handler.get_schema_info().loaded,
+                "schema_loaded": self._schema_handler.get_schema_info().loaded,
             }
         )
 
@@ -539,7 +556,7 @@ class HEDWrapper:
         if self._tabular_summary_wrapper:
             await self._tabular_summary_wrapper.close()
 
-        self.schema_handler = None
+        self._schema_handler = None
         self._initialized = False
         logger.info("HED wrapper closed")
 

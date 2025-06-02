@@ -867,11 +867,13 @@ class ColumnAnalyzer:
                     }
                 )
 
-        # Generate summary and recommendations
+        # Add summary and recommendations
         analysis["summary"] = self._generate_summary(analysis)
         analysis["recommendations"] = self._generate_recommendations(analysis)
 
+        # Store analysis for later access
         self._last_analysis = analysis
+
         return analysis
 
     async def _analyze_single_column(
@@ -1084,31 +1086,161 @@ class ColumnAnalyzer:
         return recommendations
 
     def get_analysis_summary(self) -> Optional[Dict[str, Any]]:
-        """Get summary of last analysis."""
-        return self._last_analysis.get("summary") if self._last_analysis else None
+        """Get summary of the last analysis performed."""
+        return getattr(self, "_last_analysis", None)
+
+    def get_summary(self) -> Dict[str, Any]:
+        """Get summary of the last analysis performed.
+
+        Returns:
+            Summary dictionary from the last analysis, or empty dict if no analysis
+        """
+        last_analysis = getattr(self, "_last_analysis", None)
+        if last_analysis and "summary" in last_analysis:
+            return last_analysis["summary"]
+        return {}
+
+    def suggest_hed_annotations(
+        self, analysis: Optional[Dict[str, Any]] = None
+    ) -> Dict[str, List[str]]:
+        """Suggest HED annotations for columns based on analysis.
+
+        Args:
+            analysis: Optional analysis results. If None, uses last analysis.
+
+        Returns:
+            Dictionary mapping column names to suggested HED annotations
+        """
+        if analysis is None:
+            analysis = getattr(self, "_last_analysis", None)
+
+        if not analysis or "columns" not in analysis:
+            return {}
+
+        suggestions = {}
+
+        for column_name, column_data in analysis["columns"].items():
+            column_suggestions = []
+
+            # Get basic suggestions based on column type
+            column_type = column_data.get("type", "")
+
+            if column_type == ColumnType.CATEGORICAL.value:
+                # Suggest value-based HED tags for categorical columns
+                unique_values = column_data.get("statistics", {}).get(
+                    "unique_values", []
+                )
+                for value in unique_values[:5]:  # Limit to first 5 values
+                    column_suggestions.append(f"Label/{value}")
+
+            elif column_type == ColumnType.NUMERIC.value:
+                # Suggest numeric HED patterns
+                if "reaction" in column_name.lower() or "rt" in column_name.lower():
+                    column_suggestions.append("Response-time")
+                elif "accuracy" in column_name.lower():
+                    column_suggestions.append("Performance")
+                else:
+                    column_suggestions.append("Parameter")
+
+            elif column_type == ColumnType.TEMPORAL.value:
+                # Suggest temporal HED patterns
+                if "onset" in column_name.lower():
+                    column_suggestions.append("Onset")
+                elif "duration" in column_name.lower():
+                    column_suggestions.append("Duration")
+                else:
+                    column_suggestions.append("Temporal-attribute")
+
+            # Add BIDS-specific suggestions
+            bids_match = column_data.get("bids_pattern")
+            if bids_match:
+                pattern_name = bids_match.get("name", "")
+                if "trial_type" in pattern_name.lower():
+                    column_suggestions.append("Condition")
+                elif "response" in pattern_name.lower():
+                    column_suggestions.append("Agent-action")
+                elif "stimulus" in pattern_name.lower():
+                    column_suggestions.append("Sensory-event")
+
+            # Add HED candidate suggestions
+            if column_data.get("hed_candidate", {}).get("is_candidate", False):
+                reason = column_data.get("hed_candidate", {}).get("reason", "")
+                if "categorical" in reason:
+                    column_suggestions.append("(Condition, Label/#)")
+                elif "temporal" in reason:
+                    column_suggestions.append("(Event, (Onset, Label/#))")
+
+            # Ensure we have at least a basic suggestion
+            if not column_suggestions:
+                column_suggestions.append("Label/#")
+
+            suggestions[column_name] = column_suggestions
+
+        return suggestions
+
+    async def analyze_events_file(self, file_path: Union[Path, str]) -> Dict[str, Any]:
+        """Analyze a BIDS events file for column patterns and HED annotation opportunities.
+
+        Args:
+            file_path: Path to the events TSV file
+
+        Returns:
+            Dictionary containing analysis results
+        """
+        file_path = Path(file_path)
+        df = pd.read_csv(file_path, sep="\t")
+
+        # Perform analysis and store results
+        analysis = await self.analyze_dataframe(df, file_path)
+        self._last_analysis = analysis
+
+        return analysis
 
 
 # Convenience functions
 def create_column_analyzer() -> ColumnAnalyzer:
-    """Create a new column analyzer instance."""
+    """Create a new ColumnAnalyzer instance.
+
+    Returns:
+        Configured ColumnAnalyzer instance
+    """
     return ColumnAnalyzer()
+
+
+# Create alias for backward compatibility
+BIDSColumnAnalyzer = ColumnAnalyzer
 
 
 async def analyze_columns(
     data: Union[pd.DataFrame, Path, str], source_file: Optional[Path] = None
 ) -> Dict[str, Any]:
-    """Convenience function to analyze columns in data."""
+    """Convenience function for column analysis.
+
+    Args:
+        data: DataFrame, file path, or file content to analyze
+        source_file: Optional source file path for metadata
+
+    Returns:
+        Complete analysis results
+    """
     analyzer = create_column_analyzer()
 
-    if isinstance(data, (Path, str)):
-        # Load data from file
-        file_path = Path(data)
-        if file_path.suffix.lower() == ".tsv":
-            df = pd.read_csv(file_path, sep="\t")
-        else:
-            df = pd.read_csv(file_path)
-        source_file = file_path
+    if isinstance(data, pd.DataFrame):
+        return await analyzer.analyze_dataframe(data, source_file)
+    elif isinstance(data, (Path, str)):
+        return await analyzer.analyze_file(Path(data))
     else:
-        df = data
+        raise ValueError(f"Unsupported data type: {type(data)}")
 
-    return await analyzer.analyze_dataframe(df, source_file)
+
+async def analyze_events_file(file_path: Union[Path, str]) -> Dict[str, Any]:
+    """Analyze events file for BIDS compatibility.
+
+    Args:
+        file_path: Path to the events file
+
+    Returns:
+        Analysis results including column recommendations
+    """
+    analyzer = create_column_analyzer()
+    return await analyzer.analyze_file(Path(file_path))

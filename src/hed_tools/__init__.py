@@ -27,9 +27,13 @@ except ImportError:
     create_hed_wrapper = None
 
 try:
-    from .tools.column_analyzer import BIDSColumnAnalyzer, create_column_analyzer
+    from .tools.column_analyzer import ColumnAnalyzer, create_column_analyzer
+
+    # Create alias for backward compatibility
+    BIDSColumnAnalyzer = ColumnAnalyzer
 except ImportError:
     BIDSColumnAnalyzer = None
+    ColumnAnalyzer = None
     create_column_analyzer = None
 
 try:
@@ -46,6 +50,7 @@ __all__ = [
     "HEDServer",
     "HEDWrapper",
     "BIDSColumnAnalyzer",
+    "ColumnAnalyzer",
     "FileHandler",
     # Factory functions
     "create_server",
@@ -76,7 +81,7 @@ def create_integration_suite(schema_version: str = "latest") -> dict:
     if HEDWrapper is not None:
         suite["hed_wrapper"] = create_hed_wrapper(schema_version)
 
-    if BIDSColumnAnalyzer is not None:
+    if ColumnAnalyzer is not None:
         suite["column_analyzer"] = create_column_analyzer()
 
     if FileHandler is not None:
@@ -98,7 +103,7 @@ def get_package_info() -> dict:
         "components": {
             "server": HEDServer is not None,
             "hed_wrapper": HEDWrapper is not None,
-            "column_analyzer": BIDSColumnAnalyzer is not None,
+            "column_analyzer": ColumnAnalyzer is not None,
             "file_handler": FileHandler is not None,
         },
         "dependencies": {
@@ -193,22 +198,14 @@ def quick_analyze_events(file_path, output_path=None):
     Returns:
         Analysis results dictionary
     """
-    if BIDSColumnAnalyzer is None:
-        raise ImportError("BIDSColumnAnalyzer not available - check dependencies")
+    if ColumnAnalyzer is None:
+        raise ImportError("ColumnAnalyzer not available - check dependencies")
 
     import asyncio
     from pathlib import Path
 
     async def _analyze():
         analyzer = create_column_analyzer()
-        results = await analyzer.analyze_events_file(Path(file_path))
-
-        if output_path:
-            import json
-
-            with open(output_path, "w") as f:
-                json.dump(results, f, indent=2)
-
-        return results
+        return await analyzer.analyze_events_file(Path(file_path))
 
     return asyncio.run(_analyze())

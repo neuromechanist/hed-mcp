@@ -170,7 +170,9 @@ class EventsData(BaseModel):
 class ValidationResult(BaseModel):
     """Result of HED validation operation."""
 
-    valid: bool = Field(description="Whether validation passed")
+    model_config = ConfigDict(populate_by_name=True)
+
+    valid: bool = Field(description="Whether validation passed", alias="is_valid")
     errors: List[Dict[str, Any]] = Field(
         default_factory=list, description="Validation errors"
     )
@@ -180,8 +182,24 @@ class ValidationResult(BaseModel):
     statistics: Dict[str, Any] = Field(
         default_factory=dict, description="Validation statistics"
     )
-    processing_time: float = Field(description="Time taken for validation in seconds")
-    schema_version: str = Field(description="HED schema version used")
+    processing_time: float = Field(
+        default=0.0, description="Time taken for validation in seconds"
+    )
+    schema_version: str = Field(
+        default="unknown", description="HED schema version used"
+    )
+
+    @property
+    def is_valid(self) -> bool:
+        """Backward compatibility property for is_valid."""
+        return self.valid
+
+    @property
+    def summary(self) -> str:
+        """Get summary from statistics or generate default."""
+        if "summary" in self.statistics:
+            return self.statistics["summary"]
+        return f"Validation {'passed' if self.valid else 'failed'}"
 
     @field_validator("processing_time")
     @classmethod
@@ -198,7 +216,9 @@ class SidecarTemplate(BaseModel):
     template: Dict[str, Any] = Field(description="The sidecar template dictionary")
     generated_columns: List[str] = Field(description="Columns included in template")
     schema_version: str = Field(description="HED schema version used")
-    generation_time: float = Field(description="Time taken to generate template")
+    generation_time: float = Field(
+        default=0.0, description="Time taken to generate template"
+    )
     metadata: Dict[str, Any] = Field(
         default_factory=dict, description="Additional metadata"
     )
@@ -247,8 +267,8 @@ class OperationResult(BaseModel):
     success: bool = Field(description="Whether operation succeeded")
     data: Optional[Any] = Field(default=None, description="Operation result data")
     error: Optional[str] = Field(default=None, description="Error message if failed")
-    processing_time: float = Field(description="Time taken for operation")
-    metadata: Dict[str, Any] = Field(
+    processing_time: float = Field(default=0.0, description="Time taken for operation")
+    metadata: Optional[Dict[str, Any]] = Field(
         default_factory=dict, description="Additional metadata"
     )
 

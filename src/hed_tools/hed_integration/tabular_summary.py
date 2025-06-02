@@ -101,8 +101,8 @@ class DataValidator:
         Raises:
             ValidationError: If validation fails
         """
-        if df.empty:
-            raise ValidationError("DataFrame is empty")
+        if len(df) == 0:
+            raise ValidationError("DataFrame has no rows")
 
         if df.shape[0] == 0:
             raise ValidationError("DataFrame has no rows")

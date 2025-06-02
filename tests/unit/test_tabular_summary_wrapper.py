@@ -41,10 +41,10 @@ class TestDataValidator:
         DataValidator.validate_dataframe(df)
 
     def test_validate_dataframe_empty_fails(self):
-        """Test that empty DataFrame validation fails."""
+        """Test that empty DataFrame fails validation."""
         df = pd.DataFrame()
 
-        with pytest.raises(ValidationError, match="DataFrame is empty"):
+        with pytest.raises(ValidationError, match="DataFrame has no rows"):
             DataValidator.validate_dataframe(df)
 
     def test_validate_dataframe_no_rows_fails(self):
@@ -126,7 +126,13 @@ class TestMemoryManager:
         df = pd.DataFrame(
             {
                 "small_int": [1, 2, 3, 4, 5],  # Can be downcasted
-                "large_int": [2**40, 2**41, 2**42],  # Cannot be downcasted
+                "large_int": [
+                    2**40,
+                    2**41,
+                    2**42,
+                    2**43,
+                    2**44,
+                ],  # Cannot be downcasted
             }
         )
 
@@ -281,7 +287,15 @@ class TestTabularSummaryWrapper:
 
         assert isinstance(result_df, pd.DataFrame)
         assert len(result_df) == len(sample_dataframe)
-        pd.testing.assert_frame_equal(result_df, sample_dataframe)
+        # Check data content is the same, allowing for optimization changes like categorical conversion
+        assert set(result_df.columns) == set(sample_dataframe.columns)
+        assert result_df.shape == sample_dataframe.shape
+        # Check that values are preserved (convert to string for comparison to avoid dtype issues)
+        for col in sample_dataframe.columns:
+            assert (
+                result_df[col].astype(str).tolist()
+                == sample_dataframe[col].astype(str).tolist()
+            )
 
     @pytest.mark.asyncio
     async def test_load_data_from_csv_file(self, tmp_path, sample_dataframe):

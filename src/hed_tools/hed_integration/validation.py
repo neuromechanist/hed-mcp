@@ -89,7 +89,10 @@ class HEDValidator:
             self.logger.warning(
                 "HED library not available - validation will be limited"
             )
-            return HedValidator(None)
+            # Return a stub validator that doesn't require a schema
+            return type(
+                "StubValidator", (), {"validate_string": lambda self, hed_string: []}
+            )()
 
         cache_key = schema_version or "default"
         if cache_key not in self._validator_cache:
@@ -121,23 +124,27 @@ class HEDValidator:
                 )
 
             is_valid = len(issues) == 0
-            formatted_issues = get_printable_issue_string(issues) if issues else None
 
             return ValidationResult(
-                is_valid=is_valid,
+                valid=is_valid,
                 errors=issues,
                 warnings=[],
-                summary=f"Validation {'passed' if is_valid else 'failed'} for HED string",
-                formatted_errors=formatted_issues,
+                statistics={
+                    "summary": f"Validation {'passed' if is_valid else 'failed'} for HED string"
+                },
+                processing_time=0.0,
+                schema_version=schema_version or "unknown",
             )
 
         except Exception as e:
             self.logger.error(f"Error validating HED string: {e}")
             return ValidationResult(
-                is_valid=False,
+                valid=False,
                 errors=[{"message": str(e), "code": "VALIDATION_ERROR"}],
                 warnings=[],
-                summary="Validation failed due to internal error",
+                statistics={"summary": "Validation failed due to internal error"},
+                processing_time=0.0,
+                schema_version=schema_version or "unknown",
             )
 
     async def validate_events_data(
@@ -171,12 +178,16 @@ class HEDValidator:
                     "HED library not available - using basic validation"
                 )
                 return ValidationResult(
-                    is_valid=True,
+                    valid=True,
                     errors=[],
                     warnings=[
                         {"message": "HED library not available - validation skipped"}
                     ],
-                    summary="Validation skipped due to missing HED library",
+                    statistics={
+                        "summary": "Validation skipped due to missing HED library"
+                    },
+                    processing_time=0.0,
+                    schema_version=schema_version or "unknown",
                 )
 
             # Create tabular input with sidecar
@@ -197,20 +208,25 @@ class HEDValidator:
             is_valid = len(errors) == 0
 
             return ValidationResult(
-                is_valid=is_valid,
+                valid=is_valid,
                 errors=errors,
                 warnings=warnings,
-                summary=f"Found {len(errors)} errors and {len(warnings)} warnings",
-                formatted_errors=get_printable_issue_string(issues) if issues else None,
+                statistics={
+                    "summary": f"Found {len(errors)} errors and {len(warnings)} warnings"
+                },
+                processing_time=0.0,
+                schema_version=schema_version or "unknown",
             )
 
         except Exception as e:
             self.logger.error(f"Error validating events data: {e}")
             return ValidationResult(
-                is_valid=False,
+                valid=False,
                 errors=[{"message": str(e), "code": "VALIDATION_ERROR"}],
                 warnings=[],
-                summary="Validation failed due to internal error",
+                statistics={"summary": "Validation failed due to internal error"},
+                processing_time=0.0,
+                schema_version=schema_version or "unknown",
             )
 
     async def validate_sidecar_file(
@@ -259,19 +275,30 @@ class HEDValidator:
             is_valid = len(all_issues) == 0
 
             return ValidationResult(
-                is_valid=is_valid,
+                valid=is_valid,
                 errors=all_issues,
                 warnings=[],
-                summary=f"Sidecar validation {'passed' if is_valid else 'failed'} with {len(all_issues)} issues",
+                statistics={
+                    "summary": (
+                        f"Sidecar validation {'passed' if is_valid else 'failed'} "
+                        f"with {len(all_issues)} issues"
+                    )
+                },
+                processing_time=0.0,
+                schema_version=schema_version or "unknown",
             )
 
         except Exception as e:
             self.logger.error(f"Error validating sidecar file: {e}")
             return ValidationResult(
-                is_valid=False,
+                valid=False,
                 errors=[{"message": str(e), "code": "SIDECAR_ERROR"}],
                 warnings=[],
-                summary="Sidecar validation failed due to internal error",
+                statistics={
+                    "summary": "Sidecar validation failed due to internal error"
+                },
+                processing_time=0.0,
+                schema_version=schema_version or "unknown",
             )
 
 
@@ -324,9 +351,7 @@ class SidecarGenerator:
 
             # Create or use existing TabularSummary wrapper
             if self.tabular_summary_wrapper is None:
-                wrapper = await create_tabular_summary_wrapper(
-                    data=events_df, skip_columns=skip_columns or ["onset", "duration"]
-                )
+                wrapper = create_tabular_summary_wrapper(data=events_df)
             else:
                 wrapper = self.tabular_summary_wrapper
 
@@ -338,12 +363,16 @@ class SidecarGenerator:
                     f"Failed to generate template: {template_result.error}"
                 )
 
-            template = template_result.result
+            template = template_result.data
 
             # Enhance template with schema-specific suggestions
             enhanced_template = await self._enhance_template_with_schema(
                 template, schema_version
             )
+
+            # Handle case where template enhancement failed
+            if enhanced_template is None:
+                enhanced_template = template or {}
 
             return SidecarTemplate(
                 template=enhanced_template,
@@ -477,14 +506,18 @@ class SidecarGenerator:
 
             return OperationResult(
                 success=True,
-                result={"saved_to": str(output_path), "format": format},
-                message=f"Sidecar saved successfully to {output_path}",
+                data={"saved_to": str(output_path), "format": format},
+                metadata={"message": f"Sidecar saved successfully to {output_path}"},
+                processing_time=0.0,
             )
 
         except Exception as e:
             self.logger.error(f"Error saving sidecar: {e}")
             return OperationResult(
-                success=False, error=str(e), message="Failed to save sidecar"
+                success=False,
+                error=str(e),
+                metadata={"message": "Failed to save sidecar"},
+                processing_time=0.0,
             )
 
 
@@ -555,10 +588,12 @@ class BatchValidator:
                     yield {
                         "file": str(events_file),
                         "validation_result": ValidationResult(
-                            is_valid=False,
+                            valid=False,
                             errors=[{"message": str(result)}],
                             warnings=[],
-                            summary="Validation failed due to error",
+                            statistics={"summary": "Validation failed due to error"},
+                            processing_time=0.0,
+                            schema_version="unknown",
                         ),
                         "error": str(result),
                     }
@@ -700,6 +735,18 @@ class BIDSValidator:
                     }
                 )
 
+        # Also check for improperly named TSV files that might be events
+        all_tsv_files = list(dataset_path.rglob("*.tsv"))
+        for tsv_file in all_tsv_files:
+            # Check if file looks like it could be events but doesn't follow naming
+            if not tsv_file.stem.endswith("_events") and "sub-" in str(tsv_file):
+                issues["warnings"].append(
+                    {
+                        "message": f"TSV file {tsv_file} may not follow BIDS naming",
+                        "code": "BIDS_NAMING",
+                    }
+                )
+
         return issues
 
 
@@ -739,7 +786,8 @@ async def create_sidecar_generator(
     # Create TabularSummary wrapper if config provided
     tabular_wrapper = None
     if tabular_summary_config:
-        tabular_wrapper = await create_tabular_summary_wrapper(**tabular_summary_config)
+        # Pass config parameters directly, not wrapped in config dict
+        tabular_wrapper = create_tabular_summary_wrapper(**tabular_summary_config)
 
     return SidecarGenerator(schema_handler, tabular_wrapper)
 

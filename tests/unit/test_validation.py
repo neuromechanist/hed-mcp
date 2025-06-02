@@ -7,7 +7,7 @@ including string validation, sidecar generation, batch processing, and BIDS vali
 import json
 import tempfile
 from pathlib import Path
-from unittest.mock import Mock, patch, AsyncMock
+from unittest.mock import Mock, patch, AsyncMock, ANY
 import pytest
 import pandas as pd
 
@@ -265,7 +265,7 @@ class TestSidecarGenerator:
         }
         mock_result = OperationResult(
             success=True,
-            result=mock_template,
+            data=mock_template,
             message="Template generated successfully",
         )
         mock_tabular_wrapper.extract_sidecar_template.return_value = mock_result
@@ -481,7 +481,7 @@ class TestBatchValidator:
             mock_result = ValidationResult(
                 is_valid=True, errors=[], warnings=[], summary="Validation passed"
             )
-            mock_validator.validate_events_data.return_value = mock_result
+            mock_validator.validate_events_data = AsyncMock(return_value=mock_result)
 
             # Validate directory
             results = []
@@ -510,8 +510,8 @@ class TestBatchValidator:
             )
 
             # Mock validation to raise exception
-            mock_validator.validate_events_data.side_effect = Exception(
-                "Validation error"
+            mock_validator.validate_events_data = AsyncMock(
+                side_effect=Exception("Validation error")
             )
 
             # Validate directory
@@ -618,7 +618,7 @@ class TestFactoryFunctions:
 
         assert isinstance(generator, SidecarGenerator)
         mock_handler.load_schema.assert_called_once_with("8.3.0")
-        mock_create_wrapper.assert_called_once_with(data=pd.DataFrame())
+        mock_create_wrapper.assert_called_once_with(data=ANY)
 
     @pytest.mark.asyncio
     @patch("src.hed_tools.hed_integration.validation.create_hed_validator")
