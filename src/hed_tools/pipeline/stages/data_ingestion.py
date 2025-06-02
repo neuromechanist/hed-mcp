@@ -26,17 +26,16 @@ logger = logging.getLogger(__name__)
 
 
 class DataIngestionStage(PipelineStage):
-    """Stage for ingesting and validating tabular data files.
+    """Data ingestion stage for loading and validating input data.
 
-    This stage loads various file formats (CSV, TSV, Excel) and performs
-    initial validation and preprocessing to prepare data for subsequent
-    pipeline stages.
+    Supports multiple input formats and provides comprehensive validation.
     """
 
     def __init__(self, config: Dict[str, Any] = None):
-        super().__init__("data_ingestion", config)
+        # Set a default name for this stage
+        super().__init__("DataIngestion", config)
 
-        # Configuration with defaults
+        # Configuration parameters
         self.max_file_size_mb = self.get_config_value("max_file_size_mb", 100)
         self.supported_extensions = self.get_config_value(
             "supported_extensions", [".csv", ".tsv", ".xlsx", ".xls"]
@@ -44,9 +43,7 @@ class DataIngestionStage(PipelineStage):
         self.default_encoding = self.get_config_value("encoding", "utf-8")
         self.validate_headers = self.get_config_value("validate_headers", True)
         self.clean_data = self.get_config_value("clean_data", True)
-        self.sample_size = self.get_config_value(
-            "sample_size", None
-        )  # None = full data
+        self.sample_size = self.get_config_value("sample_size", 1000)
 
     async def _initialize_implementation(self) -> None:
         """Initialize the data ingestion stage."""

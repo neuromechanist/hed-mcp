@@ -73,6 +73,14 @@ class StageConfig:
         """Get stage-specific parameter."""
         return self.parameters.get(key, default)
 
+    def get(self, key: str, default: Any = None) -> Any:
+        """Get configuration value (dict-like interface)."""
+        # First check if it's a known field
+        if hasattr(self, key):
+            return getattr(self, key)
+        # Then check parameters
+        return self.parameters.get(key, default)
+
     def set_parameter(self, key: str, value: Any) -> None:
         """Set stage-specific parameter."""
         self.parameters[key] = value

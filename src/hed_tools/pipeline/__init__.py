@@ -12,7 +12,6 @@ Architecture:
 """
 
 from .core import (
-    PipelineStage,
     PipelineContext,
     StageStatus,
     SidecarPipeline,
@@ -34,6 +33,7 @@ from .performance import (
 
 # Import all pipeline stages
 from .stages import (
+    PipelineStage,
     DataIngestionStage,
     ColumnClassificationStage,
     HEDMappingStage,
@@ -98,28 +98,17 @@ def create_default_pipeline() -> SidecarPipeline:
 
     # Add default stage instances in execution order
     pipeline.add_stage(
-        DataIngestionStage(
-            "DataIngestion", config.stage_configs.get("data_ingestion", {})
-        )
+        DataIngestionStage(config.stage_configs.get("data_ingestion", {}))
     )
     pipeline.add_stage(
-        ColumnClassificationStage(
-            "ColumnClassification",
-            config.stage_configs.get("column_classification", {}),
-        )
+        ColumnClassificationStage(config.stage_configs.get("column_classification", {}))
     )
+    pipeline.add_stage(HEDMappingStage(config.stage_configs.get("hed_mapping", {})))
     pipeline.add_stage(
-        HEDMappingStage("HEDMapping", config.stage_configs.get("hed_mapping", {}))
-    )
-    pipeline.add_stage(
-        SidecarGenerationStage(
-            "SidecarGeneration", config.stage_configs.get("sidecar_generation", {})
-        )
+        SidecarGenerationStage(config.stage_configs.get("sidecar_generation", {}))
     )
 
     if config.validation_enabled:
-        pipeline.add_stage(
-            ValidationStage("Validation", config.stage_configs.get("validation", {}))
-        )
+        pipeline.add_stage(ValidationStage(config.stage_configs.get("validation", {})))
 
     return pipeline

@@ -105,9 +105,17 @@ class PipelineStage(ABC):
     consistent behavior and integration with the pipeline framework.
     """
 
-    def __init__(self, name: str, config: Dict[str, Any] = None):
+    def __init__(self, name: str, config: Any = None):
         self.name = name
-        self.config = config or {}
+        # Handle both dict and StageConfig objects
+        if config is None:
+            self.config = {}
+        elif hasattr(config, "get"):  # Dict-like object
+            self.config = config
+        elif hasattr(config, "parameters"):  # StageConfig object
+            self.config = config
+        else:
+            self.config = config or {}
         self.logger = logging.getLogger(f"{__name__}.{name}")
         self._initialized = False
         self._performance_metrics = {}
@@ -187,7 +195,15 @@ class PipelineStage(ABC):
 
     def get_config_value(self, key: str, default: Any = None) -> Any:
         """Get a configuration value with optional default."""
-        return self.config.get(key, default)
+        if hasattr(self.config, "get"):
+            # Dict-like object or StageConfig with get method
+            return self.config.get(key, default)
+        elif hasattr(self.config, "parameters"):
+            # StageConfig object - check parameters
+            return self.config.parameters.get(key, default)
+        else:
+            # Fallback for other types
+            return getattr(self.config, key, default)
 
     @abstractmethod
     async def _initialize_implementation(self) -> None:
@@ -226,4 +242,16 @@ __all__ = [
     "register_stage",
     "get_stage_class",
     "get_available_stages",
+    "DataIngestionStage",
+    "ColumnClassificationStage",
+    "HEDMappingStage",
+    "SidecarGenerationStage",
+    "ValidationStage",
 ]
+
+# Import stage implementations at the end to avoid circular imports
+from .data_ingestion import DataIngestionStage  # noqa: E402
+from .column_classification import ColumnClassificationStage  # noqa: E402
+from .hed_mapping import HEDMappingStage  # noqa: E402
+from .sidecar_generation import SidecarGenerationStage  # noqa: E402
+from .validation import ValidationStage  # noqa: E402
