@@ -14,7 +14,6 @@ from abc import ABC, abstractmethod
 from dataclasses import dataclass, field
 from enum import Enum
 from typing import Any, Dict, List, Optional, Type
-from datetime import datetime
 
 logger = logging.getLogger(__name__)
 
@@ -30,15 +29,17 @@ class StageStatus(Enum):
 
 
 class PipelineException(Exception):
-    """Base exception for pipeline-related errors."""
+    """Custom exception for pipeline-related errors."""
 
     def __init__(
-        self, message: str, stage_name: str = None, original_error: Exception = None
+        self,
+        message: str,
+        stage_name: Optional[str] = None,
+        context: Optional[Dict[str, Any]] = None,
     ):
         super().__init__(message)
         self.stage_name = stage_name
-        self.original_error = original_error
-        self.timestamp = datetime.utcnow()
+        self.context = context or {}
 
 
 @dataclass
@@ -69,25 +70,31 @@ class PipelineContext:
     stage_timings: Dict[str, float] = field(default_factory=dict)
     total_start_time: Optional[float] = None
 
-    def add_error(self, error: str, stage_name: str = None):
-        """Add an error with optional stage context."""
-        error_msg = f"[{stage_name}] {error}" if stage_name else error
+    def add_error(self, error: str, stage_name: Optional[str] = None) -> None:
+        """Add an error to the context."""
+        if stage_name:
+            error_msg = f"[{stage_name}] {error}"
+        else:
+            error_msg = error
         self.errors.append(error_msg)
         logger.error(error_msg)
 
-    def add_warning(self, warning: str, stage_name: str = None):
-        """Add a warning with optional stage context."""
-        warning_msg = f"[{stage_name}] {warning}" if stage_name else warning
+    def add_warning(self, warning: str, stage_name: Optional[str] = None) -> None:
+        """Add a warning to the context."""
+        if stage_name:
+            warning_msg = f"[{stage_name}] {warning}"
+        else:
+            warning_msg = warning
         self.warnings.append(warning_msg)
         logger.warning(warning_msg)
 
-    def set_stage_result(self, stage_name: str, result: Any):
+    def set_stage_result(self, stage_name: str, result: Any) -> None:
         """Set the result for a specific stage."""
         self.stage_results[stage_name] = result
 
-    def get_stage_result(self, stage_name: str, default: Any = None) -> Any:
-        """Get the result from a specific stage."""
-        return self.stage_results.get(stage_name, default)
+    def get_stage_result(self, stage_name: str) -> Optional[Any]:
+        """Get the result for a specific stage."""
+        return self.stage_results.get(stage_name)
 
     def start_timing(self):
         """Start overall pipeline timing."""
@@ -106,6 +113,10 @@ class PipelineContext:
     def has_errors(self) -> bool:
         """Check if any errors were recorded."""
         return len(self.errors) > 0
+
+    def has_warnings(self) -> bool:
+        """Check if any warnings were recorded."""
+        return len(self.warnings) > 0
 
 
 class PipelineStage(ABC):

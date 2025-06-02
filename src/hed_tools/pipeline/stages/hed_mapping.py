@@ -5,8 +5,12 @@ mappings from column values to HED tags.
 """
 
 from typing import Dict, Any, List
+import pandas as pd
+import logging
 
 from ..core import PipelineStage, PipelineContext
+
+logger = logging.getLogger(__name__)
 
 
 class HEDMappingStage(PipelineStage):
@@ -29,50 +33,71 @@ class HEDMappingStage(PipelineStage):
             )
             return False
 
-        value_columns = classification.get("value_columns", [])
-        if not value_columns:
-            context.add_warning(
-                "No value columns to process for HED mapping", self.name
-            )
-            # This is not an error - we can still generate a sidecar with skip columns only
+        # Check that data ingestion provided necessary data
+        dataframe = context.input_data.get("dataframe")
+        if dataframe is None:
+            context.add_error("No dataframe found from data ingestion stage", self.name)
+            return False
 
         return True
 
     async def execute(self, context: PipelineContext) -> bool:
-        """Execute HED mapping generation."""
+        """Execute HED mapping."""
         try:
+            # Get data from previous stages
             classification = context.processed_data["column_classification"]
-            value_columns = classification["value_columns"]
-            column_analysis = classification["column_analysis"]
+            dataframe = context.input_data["dataframe"]
+            schema_version = context.input_data.get("hed_version", "8.3.0")
 
-            # Get HED schema version from input
-            schema_version = context.input_data.get("schema_version", "8.3.0")
+            # Determine mapping strategy
+            mapping_strategy = self.config.get("mapping_strategy", "intelligent")
 
-            # Generate HED mappings for value columns
-            hed_mappings = await self._generate_hed_mappings(
-                value_columns, column_analysis, schema_version, context
-            )
+            # Generate HED mappings based on strategy
+            hed_mappings = {}
+
+            if mapping_strategy == "basic":
+                hed_mappings = await self._generate_basic_mappings(
+                    classification, dataframe, schema_version, context
+                )
+            elif mapping_strategy == "intelligent":
+                hed_mappings = await self._generate_intelligent_mappings(
+                    classification, dataframe, schema_version, context
+                )
+            elif mapping_strategy == "comprehensive":
+                hed_mappings = await self._generate_comprehensive_mappings(
+                    classification, dataframe, schema_version, context
+                )
+            else:
+                context.add_warning(
+                    f"Unknown mapping strategy '{mapping_strategy}', using intelligent",
+                    self.name,
+                )
+                hed_mappings = await self._generate_intelligent_mappings(
+                    classification, dataframe, schema_version, context
+                )
 
             # Store results in context
             context.processed_data["hed_mappings"] = hed_mappings
             context.processed_data["schema_version"] = schema_version
+
             context.set_stage_result(
                 self.name,
                 {
-                    "mapped_columns": list(hed_mappings.keys()),
-                    "total_mappings": sum(
-                        len(mappings.get("value_mappings", {}))
-                        for mappings in hed_mappings.values()
+                    "mapping_strategy": mapping_strategy,
+                    "mappings_generated": len(hed_mappings),
+                    "value_columns_processed": len(
+                        classification.get("value_columns", [])
+                    ),
+                    "skip_columns_processed": len(
+                        classification.get("skip_columns", [])
                     ),
                     "schema_version": schema_version,
-                    "mapping_strategy": self.config.get(
-                        "mapping_strategy", "intelligent"
-                    ),
                 },
             )
 
             self.logger.info(
-                f"Generated HED mappings for {len(hed_mappings)} columns using schema {schema_version}"
+                f"Generated HED mappings for {len(hed_mappings)} columns "
+                f"using {mapping_strategy} strategy"
             )
 
             return True
@@ -82,187 +107,384 @@ class HEDMappingStage(PipelineStage):
             self.logger.error(f"HED mapping error: {e}", exc_info=True)
             return False
 
-    async def _generate_hed_mappings(
+    async def _generate_basic_mappings(
         self,
-        value_columns: List[str],
-        column_analysis: Dict[str, Dict[str, Any]],
+        classification: Dict[str, Any],
+        dataframe: pd.DataFrame,
         schema_version: str,
         context: PipelineContext,
     ) -> Dict[str, Dict[str, Any]]:
-        """Generate HED mappings for value columns."""
+        """Generate basic HED mappings using simple heuristics."""
 
         mappings = {}
-        mapping_strategy = self.config.get("mapping_strategy", "intelligent")
-        auto_suggest_tags = self.config.get("auto_suggest_tags", True)
 
+        # Process skip columns with minimal HED mapping
+        skip_columns = classification.get("skip_columns", [])
+        for column in skip_columns:
+            if column in dataframe.columns:
+                mappings[column] = {
+                    "description": f"Skip column: {column}",
+                    "HED": self._infer_basic_hed_tag(column),
+                    "mapping_type": "basic_skip",
+                }
+
+        # Process value columns with basic categorical mapping
+        value_columns = classification.get("value_columns", [])
         for column in value_columns:
-            if column not in column_analysis:
-                context.add_warning(
-                    f"No analysis data found for column '{column}'", self.name
+            if column in dataframe.columns:
+                column_mapping = await self._create_basic_value_mapping(
+                    column, dataframe, context
                 )
-                continue
-
-            col_data = column_analysis[column]
-
-            # Generate column-level mapping
-            column_mapping = await self._generate_column_mapping(
-                column, col_data, schema_version, mapping_strategy, context
-            )
-
-            # Generate value-specific mappings
-            if auto_suggest_tags:
-                value_mappings = await self._generate_value_mappings(
-                    column, col_data, schema_version, context
-                )
-                column_mapping["value_mappings"] = value_mappings
-
-            # Add metadata
-            column_mapping["metadata"] = {
-                "column_name": column,
-                "data_type": col_data["dtype"],
-                "unique_count": col_data["unique_count"],
-                "total_count": col_data["total_count"],
-                "mapping_strategy": mapping_strategy,
-                "schema_version": schema_version,
-            }
-
-            mappings[column] = column_mapping
+                mappings[column] = column_mapping
 
         return mappings
 
-    async def _generate_column_mapping(
+    async def _generate_intelligent_mappings(
         self,
-        column: str,
-        col_data: Dict[str, Any],
+        classification: Dict[str, Any],
+        dataframe: pd.DataFrame,
         schema_version: str,
-        mapping_strategy: str,
         context: PipelineContext,
-    ) -> Dict[str, Any]:
-        """Generate HED mapping for a specific column."""
+    ) -> Dict[str, Dict[str, Any]]:
+        """Generate intelligent HED mappings using TabularSummary integration."""
 
-        # Placeholder implementation - will be replaced with TabularSummary integration
-        # in subsequent subtasks
+        mappings = {}
 
-        column_mapping = {
-            "HED": {},
-            "description": f"Event markers for column '{column}'",
-            "levels": {},
-        }
+        # Try to use existing TabularSummary integration
+        try:
+            # Import the existing TabularSummary wrapper
+            from ...hed_integration.tabular_summary import TabularSummaryWrapper
 
-        if mapping_strategy == "basic":
-            # Basic mapping with minimal HED tags
-            column_mapping["HED"] = self._generate_basic_hed_mapping(column, col_data)
-        elif mapping_strategy == "intelligent":
-            # Intelligent mapping using heuristics and patterns
-            column_mapping["HED"] = await self._generate_intelligent_hed_mapping(
-                column, col_data, schema_version, context
+            # Initialize wrapper with schema version
+            tabular_summary = TabularSummaryWrapper()
+
+            # Process value columns with TabularSummary
+            value_columns = classification.get("value_columns", [])
+            if value_columns:
+                value_mappings = await self._use_tabular_summary(
+                    tabular_summary, dataframe, value_columns, schema_version, context
+                )
+                mappings.update(value_mappings)
+
+            # Process skip columns with enhanced heuristics
+            skip_columns = classification.get("skip_columns", [])
+            for column in skip_columns:
+                if column in dataframe.columns:
+                    mappings[column] = await self._create_enhanced_skip_mapping(
+                        column, dataframe, context
+                    )
+
+        except ImportError as e:
+            context.add_warning(
+                f"TabularSummary integration unavailable: {e}. Using basic mapping.",
+                self.name,
             )
-        elif mapping_strategy == "comprehensive":
-            # Comprehensive mapping with full TabularSummary integration
-            column_mapping["HED"] = await self._generate_comprehensive_hed_mapping(
-                column, col_data, schema_version, context
+            # Fallback to basic mapping
+            return await self._generate_basic_mappings(
+                classification, dataframe, schema_version, context
+            )
+        except Exception as e:
+            context.add_error(
+                f"TabularSummary integration failed: {e}. Using fallback mapping.",
+                self.name,
+            )
+            # Fallback to basic mapping
+            return await self._generate_basic_mappings(
+                classification, dataframe, schema_version, context
             )
 
-        return column_mapping
+        return mappings
 
-    def _generate_basic_hed_mapping(
-        self, column: str, col_data: Dict[str, Any]
-    ) -> Dict[str, Any]:
-        """Generate basic HED mapping using simple heuristics."""
-
-        # Basic mapping based on column name patterns
-        column_lower = column.lower()
-
-        if "condition" in column_lower:
-            return {"n/a": "Condition-variable/Experimental-condition"}
-        elif "response" in column_lower or "answer" in column_lower:
-            return {"n/a": "Response/Motor-response"}
-        elif "stimulus" in column_lower or "stim" in column_lower:
-            return {"n/a": "Stimulus/Stimulus-presentation"}
-        elif "task" in column_lower:
-            return {"n/a": "Task/Task-execution"}
-        else:
-            return {"n/a": "Event/Event-marker"}
-
-    async def _generate_intelligent_hed_mapping(
+    async def _generate_comprehensive_mappings(
         self,
-        column: str,
-        col_data: Dict[str, Any],
+        classification: Dict[str, Any],
+        dataframe: pd.DataFrame,
         schema_version: str,
         context: PipelineContext,
-    ) -> Dict[str, Any]:
-        """Generate intelligent HED mapping using advanced heuristics."""
+    ) -> Dict[str, Dict[str, Any]]:
+        """Generate comprehensive HED mappings with full analysis."""
 
-        # Placeholder for intelligent mapping logic
-        # This will be enhanced with TabularSummary integration
-
-        hed_mapping = {}
-        unique_values = col_data.get("unique_values", [])
-
-        # Analyze column content for intelligent mapping
-        for value in unique_values:
-            if isinstance(value, str):
-                value_str = value.lower()
-
-                # Map common experimental conditions
-                if any(
-                    keyword in value_str
-                    for keyword in ["target", "standard", "deviant"]
-                ):
-                    hed_mapping[value] = "Stimulus/Stimulus-type/Auditory-stimulus"
-                elif any(keyword in value_str for keyword in ["left", "right"]):
-                    hed_mapping[value] = "Response/Motor-response/Hand-response"
-                elif any(
-                    keyword in value_str
-                    for keyword in ["correct", "incorrect", "error"]
-                ):
-                    hed_mapping[value] = "Response/Response-accuracy"
-                else:
-                    hed_mapping[value] = "Event/Event-marker"
-            else:
-                # Numerical values
-                hed_mapping[str(value)] = "Event/Event-marker"
-
-        return hed_mapping
-
-    async def _generate_comprehensive_hed_mapping(
-        self,
-        column: str,
-        col_data: Dict[str, Any],
-        schema_version: str,
-        context: PipelineContext,
-    ) -> Dict[str, Any]:
-        """Generate comprehensive HED mapping using TabularSummary integration."""
-
-        # Placeholder for TabularSummary integration
-        # This will be implemented in the next subtask
-
-        # For now, fall back to intelligent mapping
-        return await self._generate_intelligent_hed_mapping(
-            column, col_data, schema_version, context
+        # Start with intelligent mappings
+        mappings = await self._generate_intelligent_mappings(
+            classification, dataframe, schema_version, context
         )
 
-    async def _generate_value_mappings(
+        # Enhance with additional analysis
+        for column_name, mapping in mappings.items():
+            if column_name in dataframe.columns:
+                # Add detailed statistical analysis
+                enhanced_mapping = await self._enhance_mapping_with_stats(
+                    column_name, dataframe, mapping, context
+                )
+
+                # Add cross-column relationship analysis
+                enhanced_mapping = await self._add_relationship_analysis(
+                    column_name, dataframe, enhanced_mapping, context
+                )
+
+                mappings[column_name] = enhanced_mapping
+
+        return mappings
+
+    async def _use_tabular_summary(
         self,
-        column: str,
-        col_data: Dict[str, Any],
+        tabular_summary: Any,
+        dataframe: pd.DataFrame,
+        value_columns: List[str],
         schema_version: str,
         context: PipelineContext,
+    ) -> Dict[str, Dict[str, Any]]:
+        """Use TabularSummary to generate HED mappings for value columns."""
+
+        mappings = {}
+
+        # Filter dataframe to only value columns
+        value_data = dataframe[value_columns]
+
+        try:
+            # Use the existing async wrapper to get TabularSummary results
+            summary_result = await tabular_summary.generate_summary_async(
+                value_data,
+                hed_schema_version=schema_version,
+                include_context=True,
+                # Add other parameters as needed from context
+            )
+
+            # Extract HED mappings from TabularSummary result
+            if summary_result and "column_summary" in summary_result:
+                column_summaries = summary_result["column_summary"]
+
+                for column in value_columns:
+                    if column in column_summaries:
+                        column_summary = column_summaries[column]
+
+                        mapping = {
+                            "description": column_summary.get(
+                                "description", f"Value column: {column}"
+                            ),
+                            "HED": column_summary.get("hed_tags", ""),
+                            "mapping_type": "tabular_summary",
+                            "confidence": column_summary.get("confidence", 0.0),
+                        }
+
+                        # Add value-level mappings if available
+                        if "value_mappings" in column_summary:
+                            mapping["value_mappings"] = column_summary["value_mappings"]
+
+                        mappings[column] = mapping
+
+            # Add context metadata
+            context.metadata["tabular_summary_used"] = True
+            context.metadata["tabular_summary_version"] = getattr(
+                tabular_summary, "version", "unknown"
+            )
+
+        except Exception as e:
+            context.add_warning(
+                f"TabularSummary processing failed for value columns: {e}", self.name
+            )
+            # Fallback to basic mapping for value columns
+            for column in value_columns:
+                if column in dataframe.columns:
+                    mappings[column] = await self._create_basic_value_mapping(
+                        column, dataframe, context
+                    )
+
+        return mappings
+
+    async def _create_basic_value_mapping(
+        self, column: str, dataframe: pd.DataFrame, context: PipelineContext
     ) -> Dict[str, Any]:
-        """Generate HED mappings for specific values in the column."""
+        """Create basic HED mapping for a value column."""
 
-        value_mappings = {}
-        unique_values = col_data.get("unique_values", [])
+        column_data = dataframe[column]
+        unique_values = column_data.dropna().unique()
 
-        # Generate descriptions for each unique value
-        for value in unique_values:
-            # Placeholder implementation
-            value_mappings[str(value)] = {
-                "HED": f"Event/Event-marker/{value}",
-                "description": f"Event marker for {column} value: {value}",
-            }
+        mapping = {
+            "description": f"Value column: {column}",
+            "HED": self._infer_basic_hed_tag(column),
+            "mapping_type": "basic_value",
+        }
 
-        return value_mappings
+        # Add value mappings for categorical columns
+        if len(unique_values) <= 20:  # Threshold for categorical
+            value_mappings = {}
+            for value in unique_values:
+                value_mappings[str(value)] = {
+                    "HED": self._infer_value_hed_tag(column, value),
+                    "description": f"Value '{value}' in column '{column}'",
+                }
+            mapping["value_mappings"] = value_mappings
+
+        return mapping
+
+    async def _create_enhanced_skip_mapping(
+        self, column: str, dataframe: pd.DataFrame, context: PipelineContext
+    ) -> Dict[str, Any]:
+        """Create enhanced HED mapping for a skip column."""
+
+        mapping = {
+            "description": f"Skip column: {column} (likely metadata or identifier)",
+            "HED": self._infer_skip_hed_tag(column),
+            "mapping_type": "enhanced_skip",
+        }
+
+        # Add column analysis
+        column_data = dataframe[column]
+        mapping["metadata"] = {
+            "unique_count": column_data.nunique(),
+            "null_count": column_data.isnull().sum(),
+            "dtype": str(column_data.dtype),
+        }
+
+        return mapping
+
+    async def _enhance_mapping_with_stats(
+        self,
+        column_name: str,
+        dataframe: pd.DataFrame,
+        mapping: Dict[str, Any],
+        context: PipelineContext,
+    ) -> Dict[str, Any]:
+        """Enhance mapping with statistical analysis."""
+
+        column_data = dataframe[column_name]
+
+        # Add comprehensive statistics
+        stats = {
+            "count": len(column_data),
+            "unique_count": column_data.nunique(),
+            "null_count": column_data.isnull().sum(),
+            "dtype": str(column_data.dtype),
+        }
+
+        # Add numeric statistics if applicable
+        if pd.api.types.is_numeric_dtype(column_data):
+            stats.update(
+                {
+                    "mean": float(column_data.mean())
+                    if not column_data.isnull().all()
+                    else None,
+                    "std": float(column_data.std())
+                    if not column_data.isnull().all()
+                    else None,
+                    "min": float(column_data.min())
+                    if not column_data.isnull().all()
+                    else None,
+                    "max": float(column_data.max())
+                    if not column_data.isnull().all()
+                    else None,
+                }
+            )
+
+        mapping["statistics"] = stats
+        return mapping
+
+    async def _add_relationship_analysis(
+        self,
+        column_name: str,
+        dataframe: pd.DataFrame,
+        mapping: Dict[str, Any],
+        context: PipelineContext,
+    ) -> Dict[str, Any]:
+        """Add cross-column relationship analysis."""
+
+        # Simple correlation analysis for numeric columns
+        if pd.api.types.is_numeric_dtype(dataframe[column_name]):
+            numeric_columns = dataframe.select_dtypes(include=[float, int]).columns
+            correlations = {}
+
+            for other_col in numeric_columns:
+                if other_col != column_name:
+                    try:
+                        corr = dataframe[column_name].corr(dataframe[other_col])
+                        if abs(corr) > 0.5:  # Threshold for significant correlation
+                            correlations[other_col] = float(corr)
+                    except Exception:
+                        continue
+
+            if correlations:
+                mapping["relationships"] = {"correlations": correlations}
+
+        return mapping
+
+    def _infer_basic_hed_tag(self, column_name: str) -> str:
+        """Infer basic HED tag from column name."""
+
+        col_lower = column_name.lower()
+
+        # Time-related columns
+        if any(
+            keyword in col_lower
+            for keyword in ["time", "timestamp", "duration", "latency"]
+        ):
+            return "Temporal-value"
+
+        # Response-related columns
+        elif any(
+            keyword in col_lower for keyword in ["response", "rt", "reaction", "answer"]
+        ):
+            return "Response-time"
+
+        # Stimulus-related columns
+        elif any(
+            keyword in col_lower for keyword in ["stimulus", "stim", "cue", "trial"]
+        ):
+            return "Stimulus"
+
+        # Condition/event columns
+        elif any(
+            keyword in col_lower for keyword in ["condition", "event", "phase", "block"]
+        ):
+            return "Condition-variable"
+
+        # Identifier columns
+        elif any(
+            keyword in col_lower
+            for keyword in ["id", "subject", "participant", "session"]
+        ):
+            return "Label"
+
+        # Default
+        else:
+            return "Data-value"
+
+    def _infer_skip_hed_tag(self, column_name: str) -> str:
+        """Infer HED tag for skip columns (typically metadata)."""
+
+        col_lower = column_name.lower()
+
+        if any(keyword in col_lower for keyword in ["id", "subject", "participant"]):
+            return "Label/Participant-identifier"
+        elif any(keyword in col_lower for keyword in ["session", "run", "block"]):
+            return "Label/Session-identifier"
+        elif any(keyword in col_lower for keyword in ["trial", "sequence"]):
+            return "Label/Trial-identifier"
+        else:
+            return "Label"
+
+    def _infer_value_hed_tag(self, column_name: str, value: Any) -> str:
+        """Infer HED tag for specific values in a column."""
+
+        col_lower = column_name.lower()
+        val_str = str(value).lower()
+
+        # Response values
+        if any(keyword in col_lower for keyword in ["response", "answer", "choice"]):
+            if val_str in ["correct", "1", "true", "yes"]:
+                return "Response/Correct"
+            elif val_str in ["incorrect", "0", "false", "no"]:
+                return "Response/Incorrect"
+            else:
+                return f"Response/{value}"
+
+        # Condition values
+        elif any(keyword in col_lower for keyword in ["condition", "trial_type"]):
+            return f"Condition-variable/{value}"
+
+        # Generic value mapping
+        else:
+            return f"Data-value/{value}"
 
     async def cleanup(self, context: PipelineContext) -> None:
         """Cleanup resources after HED mapping."""

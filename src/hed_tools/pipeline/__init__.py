@@ -28,7 +28,7 @@ from .stages import (
 )
 
 __all__ = [
-    # Core pipeline components
+    # Core components
     "PipelineStage",
     "SidecarPipeline",
     "PipelineContext",
@@ -37,7 +37,7 @@ __all__ = [
     # Configuration
     "PipelineConfig",
     "StageConfig",
-    # Stages
+    # Pipeline stages
     "DataIngestionStage",
     "ColumnClassificationStage",
     "HEDMappingStage",

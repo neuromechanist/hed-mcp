@@ -1,13 +1,7 @@
 """Pipeline stages for HED sidecar generation.
 
-This package contains the individual pipeline stages that handle different
-aspects of the sidecar generation process:
-
-- DataIngestionStage: Load and validate input files
-- ColumnClassificationStage: Process LLM-classified columns
-- HEDMappingStage: Generate HED annotations using TabularSummary
-- SidecarGenerationStage: Create final JSON template
-- ValidationStage: Validate against HED schema
+This module contains all pipeline stages for the modular HED sidecar generation
+process, each implementing specific processing steps in the overall workflow.
 """
 
 from .data_ingestion import DataIngestionStage
