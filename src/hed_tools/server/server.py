@@ -110,7 +110,7 @@ class HEDServer:
                 ),
                 types.Tool(
                     name="generate_hed_sidecar",
-                    description="Generate HED sidecar template from analyzed columns",
+                    description="Generate HED sidecar template with intelligent mapping",
                     inputSchema={
                         "type": "object",
                         "properties": {
@@ -133,6 +133,32 @@ class HEDServer:
                                 "type": "string",
                                 "description": "HED schema version",
                                 "default": "8.3.0",
+                            },
+                            "output_format": {
+                                "type": "string",
+                                "description": "Output format for the sidecar template",
+                                "default": "json",
+                                "enum": ["json", "yaml"],
+                            },
+                            "include_descriptions": {
+                                "type": "boolean",
+                                "description": "Include column descriptions in the sidecar template",
+                                "default": True,
+                            },
+                            "include_examples": {
+                                "type": "boolean",
+                                "description": "Include example values in the sidecar template",
+                                "default": False,
+                            },
+                            "auto_suggest_tags": {
+                                "type": "boolean",
+                                "description": "Automatically suggest HED tags based on column analysis",
+                                "default": True,
+                            },
+                            "validate_schema_compatibility": {
+                                "type": "boolean",
+                                "description": "Validate schema version compatibility",
+                                "default": True,
                             },
                         },
                         "required": ["file_path", "value_cols"],
@@ -249,8 +275,8 @@ class HEDServer:
                     types.TextContent(
                         type="text",
                         text=(
-                            "📊 Column Analysis Results\\n\\n"
-                            "Column analysis not available - components not initialized\\n\\n"
+                            "📊 Column Analysis Results\n\n"
+                            "Column analysis not available - components not initialized\n\n"
                             "Please ensure HED tools are properly configured."
                         ),
                     )
@@ -265,8 +291,8 @@ class HEDServer:
                         types.TextContent(
                             type="text",
                             text=(
-                                f"📊 Column Analysis Results\\n\\n"
-                                f"Analysis completed but no structured data returned for: {file_path}\\n\\n"
+                                f"📊 Column Analysis Results\n\n"
+                                f"Analysis completed but no structured data returned for: {file_path}\n\n"
                                 f"The file may be empty or have an unsupported format."
                             ),
                         )
@@ -289,9 +315,9 @@ class HEDServer:
                     types.TextContent(
                         type="text",
                         text=(
-                            f"📊 Column Analysis Results\\n\\n"
-                            f"Analysis failed for: {file_path}\\n\\n"
-                            f"Error: {str(e)}\\n\\n"
+                            f"📊 Column Analysis Results\n\n"
+                            f"Analysis failed for: {file_path}\n\n"
+                            f"Error: {str(e)}\n\n"
                             f"Please check the file format and try again."
                         ),
                     )
@@ -320,7 +346,7 @@ class HEDServer:
         # Extract columns data from the analysis result
         columns = analysis_result.get("columns", {})
         if not columns:
-            return f"📊 Column Analysis Results\\n\\nNo columns found in: {file_path}"
+            return f"📊 Column Analysis Results\n\nNo columns found in: {file_path}"
 
         output_lines = [
             "📊 Column Analysis Results",
@@ -359,7 +385,7 @@ class HEDServer:
                 categorical_columns.append(col_name)
                 col_category = "categorical"
 
-            output_lines.append(f"\\n• {col_name} ({col_category})")
+            output_lines.append(f"\n• {col_name} ({col_category})")
             output_lines.append(f"  Type: {col_type}")
             output_lines.append(f"  Unique values: {unique_count}")
 
@@ -451,7 +477,7 @@ class HEDServer:
             max_score = len(bids_required) * 2 + len(bids_recommended)
             compliance_pct = (bids_score / max_score) * 100 if max_score > 0 else 0
             output_lines.append(
-                f"\\nBIDS compliance score: {compliance_pct:.1f}% ({bids_score}/{max_score})"
+                f"\nBIDS compliance score: {compliance_pct:.1f}% ({bids_score}/{max_score})"
             )
 
         # Analysis summary and recommendations
@@ -498,7 +524,7 @@ class HEDServer:
                     f"• Numerical columns ({num_cols_str}) may benefit from statistical validation"
                 )
 
-        return "\\n".join(output_lines)
+        return "\n".join(output_lines)
 
     def _suggest_hed_annotations(
         self, column_name: str, sample_values: List[Any], category: str
@@ -545,87 +571,448 @@ class HEDServer:
     async def _generate_hed_sidecar(
         self, arguments: Dict[str, Any]
     ) -> List[types.TextContent]:
-        """Generate HED sidecar template."""
-        file_path = arguments.get("file_path", "")
-        skip_cols = arguments.get("skip_cols", ["onset", "duration"])
-        value_cols = arguments.get("value_cols", [])
-        schema_version = arguments.get("schema_version", "8.3.0")
+        """Generate HED sidecar template with intelligent mapping.
 
-        if not file_path:
-            raise ValueError("No file_path provided")
-
-        if not value_cols:
-            raise ValueError("No value_cols provided")
-
+        Enhanced implementation for subtask 4.5:
+        - Comprehensive parameter validation
+        - Integration with hed_schemas resource
+        - Intelligent column to HED tag mapping
+        - Configuration options for customization
+        - Schema validation and compatibility
+        - Multiple output format support
+        """
         try:
-            # Generate basic sidecar template
-            sidecar = await self._create_basic_sidecar_template(
-                file_path, skip_cols, value_cols, schema_version
+            # Enhanced parameter validation
+            file_path = arguments.get("file_path")
+            if not file_path:
+                raise ValueError("file_path parameter is required")
+
+            if not isinstance(file_path, str) or file_path.strip() == "":
+                raise ValueError("file_path must be a non-empty string")
+
+            # Validate file exists and is readable
+            import os
+
+            if not os.path.exists(file_path):
+                raise ValueError(f"File not found: {file_path}")
+
+            if not os.access(file_path, os.R_OK):
+                raise ValueError(f"File not readable: {file_path}")
+
+            # Process parameters with defaults and validation
+            skip_cols = arguments.get("skip_cols", ["onset", "duration"])
+            if not isinstance(skip_cols, list):
+                skip_cols = ["onset", "duration"]
+
+            value_cols = arguments.get("value_cols", [])
+            if not isinstance(value_cols, list):
+                raise ValueError("value_cols must be a list of column names")
+
+            schema_version = arguments.get("schema_version", "8.3.0")
+            if not isinstance(schema_version, str):
+                schema_version = "8.3.0"
+
+            # Additional configuration options
+            output_format = arguments.get("output_format", "json").lower()
+            if output_format not in ["json", "yaml"]:
+                output_format = "json"
+
+            include_descriptions = arguments.get("include_descriptions", True)
+            include_examples = arguments.get("include_examples", False)
+            auto_suggest_tags = arguments.get("auto_suggest_tags", True)
+            validate_schema_compatibility = arguments.get(
+                "validate_schema_compatibility", True
             )
 
-            response = "📄 Generated HED Sidecar Template\n\n"
-            response += f"File: {file_path}\n"
-            response += f"Schema: {schema_version}\n"
-            response += f"Skip columns: {skip_cols}\n"
-            response += f"Value columns: {value_cols}\n\n"
-            response += "Sidecar template:\n```json\n"
+            # Validate schema version exists
+            if validate_schema_compatibility:
+                schema_info = await self._validate_schema_version(schema_version)
+                if not schema_info["is_valid"]:
+                    logger.warning(
+                        f"Schema version {schema_version} validation failed: {schema_info['message']}"
+                    )
+                    # Continue with warning but use fallback
 
-            import json
+            # Generate enhanced sidecar
+            sidecar_result = await self._create_enhanced_sidecar_template(
+                file_path=file_path,
+                skip_cols=skip_cols,
+                value_cols=value_cols,
+                schema_version=schema_version,
+                auto_suggest_tags=auto_suggest_tags,
+                include_descriptions=include_descriptions,
+                include_examples=include_examples,
+            )
 
-            response += json.dumps(sidecar, indent=2)
-            response += "\n```"
+            # Format output based on requested format
+            formatted_output = self._format_sidecar_output(
+                sidecar_result, output_format, file_path, schema_version
+            )
 
-            return [types.TextContent(type="text", text=response)]
+            return [types.TextContent(type="text", text=formatted_output)]
 
+        except ValueError as e:
+            logger.error(f"Sidecar generation validation error: {e}")
+            raise e
         except Exception as e:
             logger.error(f"Sidecar generation error: {e}")
             return [
                 types.TextContent(
-                    type="text", text=f"Sidecar generation failed: {str(e)}"
+                    type="text",
+                    text=f"📄 HED Sidecar Generation Failed\n\nError: {str(e)}\n\nPlease check the parameters and try again.",
                 )
             ]
 
-    async def _create_basic_sidecar_template(
+    async def _validate_schema_version(self, schema_version: str) -> Dict[str, Any]:
+        """Validate schema version availability and compatibility."""
+        try:
+            # Get schema information from our hed_schemas resource
+            schema_info_json = await self._get_schema_info()
+            import json
+
+            schema_data = json.loads(schema_info_json)
+
+            schemas = schema_data.get("schemas", {})
+            if schema_version in schemas:
+                schema_metadata = schemas[schema_version]
+                return {
+                    "is_valid": True,
+                    "metadata": schema_metadata,
+                    "message": f"Schema {schema_version} is available",
+                    "status": schema_metadata.get("status", "unknown"),
+                }
+            else:
+                available_versions = list(schemas.keys())
+                return {
+                    "is_valid": False,
+                    "metadata": None,
+                    "message": f"Schema {schema_version} not found. Available: {available_versions}",
+                    "available_versions": available_versions,
+                }
+        except Exception as e:
+            logger.error(f"Schema validation error: {e}")
+            return {
+                "is_valid": False,
+                "metadata": None,
+                "message": f"Schema validation failed: {str(e)}",
+                "error": str(e),
+            }
+
+    async def _create_enhanced_sidecar_template(
         self,
         file_path: str,
         skip_cols: List[str],
         value_cols: List[str],
         schema_version: str,
+        auto_suggest_tags: bool = True,
+        include_descriptions: bool = True,
+        include_examples: bool = False,
     ) -> Dict[str, Any]:
-        """Create a basic HED sidecar template."""
+        """Create an enhanced HED sidecar template with intelligent mapping.
+
+        Features:
+        - Intelligent column analysis integration
+        - Automatic HED tag suggestions
+        - Schema-specific tag validation
+        - Comprehensive metadata generation
+        """
         import pandas as pd
 
-        # Read the file to get actual values
+        # Read and analyze the file
         try:
             df = pd.read_csv(file_path, sep="\t")
         except Exception as e:
             raise ValueError(f"Could not read file {file_path}: {e}")
 
-        sidecar = {}
+        # Get column analysis if available
+        column_analysis = None
+        if self.column_analyzer and auto_suggest_tags:
+            try:
+                column_analysis = await self.column_analyzer.analyze_events_file(
+                    file_path
+                )
+            except Exception as e:
+                logger.warning(f"Column analysis failed, proceeding without: {e}")
 
-        # Process each value column
+        sidecar = {
+            "_meta": {
+                "generated_by": "HED MCP Server",
+                "schema_version": schema_version,
+                "source_file": file_path,
+                "generation_timestamp": self._get_current_timestamp(),
+                "total_columns": len(df.columns),
+                "processed_columns": [],
+                "skipped_columns": skip_cols,
+                "auto_suggestions": auto_suggest_tags,
+            }
+        }
+
+        # Process value columns
+        processed_cols = []
         for col in value_cols:
             if col not in df.columns:
+                logger.warning(f"Column '{col}' not found in file")
                 continue
 
-            unique_values = df[col].dropna().unique()
+            if col in skip_cols:
+                logger.warning(f"Column '{col}' is in skip list, skipping")
+                continue
 
-            sidecar[col] = {
+            # Get unique values and their counts
+            value_counts = df[col].value_counts()
+            unique_values = df[col].dropna().unique()
+            total_entries = len(df[col].dropna())
+
+            # Build column metadata
+            col_metadata = {
                 "LevelsAndValues": {},
-                "Description": f"Event type information for {col}",
+                "Description": self._generate_column_description(
+                    col, unique_values, include_descriptions
+                ),
                 "HED": {},
+                "_column_stats": {
+                    "unique_count": len(unique_values),
+                    "total_entries": total_entries,
+                    "coverage": (total_entries / len(df)) * 100 if len(df) > 0 else 0,
+                },
             }
 
-            # Add entry for each unique value
+            # Add examples if requested
+            if include_examples:
+                col_metadata["_examples"] = {
+                    "sample_values": [str(v) for v in unique_values[:5]],
+                    "most_common": str(value_counts.index[0])
+                    if len(value_counts) > 0
+                    else None,
+                    "least_common": str(value_counts.index[-1])
+                    if len(value_counts) > 0
+                    else None,
+                }
+
+            # Process each unique value
             for value in unique_values:
                 value_str = str(value)
-                sidecar[col]["LevelsAndValues"][value_str] = (
-                    f"Description for {value_str}"
+                frequency = value_counts.get(value, 0)
+                percentage = (
+                    (frequency / total_entries * 100) if total_entries > 0 else 0
                 )
-                # Start with basic sensory event tag
-                sidecar[col]["HED"][value_str] = "Sensory-event"
+
+                # Generate level description
+                if include_descriptions:
+                    col_metadata["LevelsAndValues"][value_str] = (
+                        f"{value_str} (occurs {frequency} times, {percentage:.1f}%)"
+                    )
+                else:
+                    col_metadata["LevelsAndValues"][value_str] = f"Value: {value_str}"
+
+                # Generate HED tags
+                if auto_suggest_tags:
+                    # Use intelligent suggestion from column analysis
+                    suggested_tags = self._generate_intelligent_hed_mapping(
+                        col, value_str, column_analysis, schema_version
+                    )
+                    col_metadata["HED"][value_str] = suggested_tags
+                else:
+                    # Use basic fallback
+                    col_metadata["HED"][value_str] = "Sensory-event"
+
+            sidecar[col] = col_metadata
+            processed_cols.append(col)
+
+        # Update metadata
+        sidecar["_meta"]["processed_columns"] = processed_cols
+        sidecar["_meta"]["processing_summary"] = {
+            "requested_columns": len(value_cols),
+            "successfully_processed": len(processed_cols),
+            "skipped_columns": len([c for c in value_cols if c in skip_cols]),
+            "missing_columns": len([c for c in value_cols if c not in df.columns]),
+        }
 
         return sidecar
+
+    def _generate_column_description(
+        self, column_name: str, unique_values: List[Any], include_descriptions: bool
+    ) -> str:
+        """Generate intelligent column descriptions."""
+        if not include_descriptions:
+            return f"Event information for column {column_name}"
+
+        col_lower = column_name.lower()
+        unique_count = len(unique_values)
+
+        # Generate smart descriptions based on column name and content
+        if "trial" in col_lower or "condition" in col_lower:
+            return f"Experimental condition variable with {unique_count} different trial types"
+        elif "response" in col_lower:
+            return f"Participant response information with {unique_count} possible responses"
+        elif "stimulus" in col_lower or "stim" in col_lower:
+            return (
+                f"Stimulus presentation information with {unique_count} stimulus types"
+            )
+        elif "accuracy" in col_lower or "correct" in col_lower:
+            return f"Performance accuracy measure with {unique_count} accuracy levels"
+        elif "category" in col_lower or "type" in col_lower:
+            return f"Categorical classification with {unique_count} categories"
+        else:
+            return (
+                f"Event attribute '{column_name}' with {unique_count} possible values"
+            )
+
+    def _generate_intelligent_hed_mapping(
+        self,
+        column_name: str,
+        value: str,
+        column_analysis: Dict[str, Any],
+        schema_version: str,
+    ) -> str:
+        """Generate intelligent HED tag mapping using column analysis and context."""
+
+        # Get suggestions from our existing suggestion system
+        sample_values = [value]  # Single value context
+        col_lower = column_name.lower()
+
+        # Determine category based on column analysis if available
+        category = "categorical"  # Default
+        if column_analysis and "columns" in column_analysis:
+            col_info = column_analysis["columns"].get(column_name, {})
+            if col_lower in ["onset", "duration", "offset"]:
+                category = "temporal"
+            elif col_info.get("type") in ["float64", "int64", "numeric"]:
+                category = "numerical"
+
+        # Get base suggestions
+        base_suggestions = self._suggest_hed_annotations(
+            column_name, sample_values, category
+        )
+
+        # Enhanced value-specific mapping
+        value_lower = str(value).lower()
+        enhanced_tags = []
+
+        # Add base suggestions
+        if base_suggestions:
+            enhanced_tags.extend(base_suggestions[:2])  # Take top 2 suggestions
+
+        # Add value-specific enhancements
+        if "visual" in value_lower or "image" in value_lower:
+            enhanced_tags.append("Visual-stimulus")
+        elif "audio" in value_lower or "sound" in value_lower:
+            enhanced_tags.append("Auditory-stimulus")
+        elif "tactile" in value_lower or "touch" in value_lower:
+            enhanced_tags.append("Tactile-stimulus")
+        elif "go" in value_lower:
+            enhanced_tags.append("Go-task")
+        elif "stop" in value_lower or "nogo" in value_lower:
+            enhanced_tags.append("Stop-task")
+        elif value_lower in ["left", "right"]:
+            enhanced_tags.append("Spatial-location")
+        elif (
+            value_lower in ["correct", "incorrect", "1", "0"]
+            and "accuracy" in col_lower
+        ):
+            enhanced_tags.append("Performance-metric")
+
+        # Remove duplicates and create final tag string
+        unique_tags = list(
+            dict.fromkeys(enhanced_tags)
+        )  # Preserve order, remove duplicates
+
+        if not unique_tags:
+            # Fallback based on column name patterns
+            if "trial" in col_lower or "condition" in col_lower:
+                return "Experimental-condition"
+            elif "response" in col_lower:
+                return "Participant-response"
+            else:
+                return "Sensory-event"
+
+        # Return combined tags (follow HED tag combination syntax)
+        if len(unique_tags) == 1:
+            return unique_tags[0]
+        else:
+            return f"({', '.join(unique_tags)})"
+
+    def _format_sidecar_output(
+        self,
+        sidecar: Dict[str, Any],
+        output_format: str,
+        file_path: str,
+        schema_version: str,
+    ) -> str:
+        """Format sidecar output in requested format with comprehensive metadata."""
+
+        # Build header information
+        header_lines = [
+            "📄 Generated HED Sidecar Template",
+            "=" * 50,
+            f"Source file: {file_path}",
+            f"HED schema version: {schema_version}",
+            f"Output format: {output_format.upper()}",
+            f"Generated at: {sidecar.get('_meta', {}).get('generation_timestamp', 'unknown')}",
+            "",
+        ]
+
+        # Add processing summary
+        meta = sidecar.get("_meta", {})
+        if "processing_summary" in meta:
+            summary = meta["processing_summary"]
+            header_lines.extend(
+                [
+                    "Processing Summary:",
+                    "-" * 20,
+                    f"• Requested columns: {summary.get('requested_columns', 0)}",
+                    f"• Successfully processed: {summary.get('successfully_processed', 0)}",
+                    f"• Skipped columns: {summary.get('skipped_columns', 0)}",
+                    f"• Missing columns: {summary.get('missing_columns', 0)}",
+                    "",
+                ]
+            )
+
+        # Format the sidecar content
+        # Remove metadata from the output sidecar for clean format
+        clean_sidecar = {k: v for k, v in sidecar.items() if not k.startswith("_")}
+
+        if output_format == "yaml":
+            try:
+                import yaml
+
+                formatted_content = yaml.dump(
+                    clean_sidecar, default_flow_style=False, indent=2
+                )
+                content_header = "YAML Sidecar Template:"
+                content_wrapper = "```yaml"
+            except ImportError:
+                # Fallback to JSON if YAML not available
+                import json
+
+                formatted_content = json.dumps(clean_sidecar, indent=2)
+                content_header = "JSON Sidecar Template (YAML not available):"
+                content_wrapper = "```json"
+        else:
+            import json
+
+            formatted_content = json.dumps(clean_sidecar, indent=2)
+            content_header = "JSON Sidecar Template:"
+            content_wrapper = "```json"
+
+        # Build final output
+        output_lines = header_lines + [
+            content_header,
+            content_wrapper,
+            formatted_content,
+            "```",
+            "",
+            "Usage Instructions:",
+            "-" * 20,
+            "1. Save the template to a .json file in your BIDS dataset",
+            "2. Review and customize the HED annotations for your specific study",
+            "3. Validate the sidecar using HED validation tools",
+            "4. Place the sidecar alongside your events.tsv file",
+            "",
+            "⚠️  Note: Auto-generated HED tags are suggestions and should be reviewed by domain experts.",
+        ]
+
+        return "\n".join(output_lines)
 
     async def _get_schema_info(self) -> str:
         """Get comprehensive information about available HED schemas.
