@@ -8,7 +8,7 @@ what actually works in our implementation.
 import pytest
 import pandas as pd
 import time
-from unittest.mock import patch
+from unittest.mock import patch, Mock, AsyncMock
 
 from src.hed_tools.pipeline import (
     SidecarPipeline,
@@ -102,7 +102,17 @@ class TestTask5CoreObjectives:
         pipeline.add_stage(ColumnClassificationStage({}))
 
         # Mock the HED-dependent stages to avoid external dependencies
-        with patch("src.hed_tools.pipeline.stages.hed_mapping.SchemaHandler"):
+        with patch(
+            "src.hed_tools.pipeline.stages.hed_mapping.SchemaHandler"
+        ) as mock_handler_class:
+            # Create an async mock handler
+            mock_handler = Mock()
+            mock_handler.initialize = AsyncMock(return_value=None)
+            mock_handler.validate_tag_async = AsyncMock(return_value=True)
+            mock_handler.suggest_tags_async = AsyncMock(return_value=["Event"])
+            mock_handler.get_schema_version = Mock(return_value="8.2.0")
+            mock_handler_class.return_value = mock_handler
+
             pipeline.add_stage(HEDMappingStage({}))
             pipeline.add_stage(SidecarGenerationStage({}))
             pipeline.add_stage(ValidationStage({}))
@@ -123,7 +133,7 @@ class TestTask5CoreObjectives:
 
             # Verify execution info is captured
             assert "execution_info" in result
-            assert "total_time" in result["execution_info"]
+            assert "total_execution_time" in result["execution_info"]
 
     def test_objective_4_stage_interfaces(self):
         """Test Objective 4: All stages implement consistent interfaces."""
@@ -240,9 +250,9 @@ class TestTask5CoreObjectives:
         assert "execution_info" in result
         execution_info = result["execution_info"]
 
-        assert "total_time" in execution_info
+        assert "total_execution_time" in execution_info
         assert "stages_executed" in execution_info
-        assert execution_info["total_time"] >= 0.0
+        assert execution_info["total_execution_time"] >= 0.0
 
     @pytest.mark.asyncio
     async def test_full_pipeline_integration(self, sample_event_data):

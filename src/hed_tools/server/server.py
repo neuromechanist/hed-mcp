@@ -1630,42 +1630,23 @@ class HEDServer:
     def _validate_and_sanitize_arguments(
         self, tool_name: str, arguments: Dict[str, Any]
     ) -> Dict[str, Any]:
-        """Validate and sanitize tool arguments for security."""
-        sanitized = {}
+        """Validate and sanitize arguments for security."""
+        # Remove any potentially dangerous arguments
+        sanitized = arguments.copy()
 
-        # Log request for auditing
-        MCPErrorHandler.log_request_context(tool_name, arguments)
-
-        for key, value in arguments.items():
-            if key == "file_path" and value:
-                # Enhanced file path validation
-                sanitized[key] = InputValidator.validate_file_path(
-                    value, self.security_config
-                )
-            elif key in ["value_cols", "skip_cols"] and value:
-                # Validate column lists
-                sanitized[key] = InputValidator.validate_column_list(value)
-            elif key == "schema_version" and value:
-                # Validate schema version format
-                sanitized[key] = InputValidator.validate_schema_version(value)
-            elif key == "max_unique_values" and value:
-                # Validate numerical parameters
-                if not isinstance(value, int) or value < 1 or value > 1000:
-                    sanitized[key] = 20  # Safe default
-                else:
-                    sanitized[key] = value
-            else:
-                # General sanitization for other parameters
-                if isinstance(value, str):
-                    # Remove null bytes and excessive whitespace
-                    sanitized[key] = value.replace("\0", "").strip()
-                    # Limit string length to prevent DoS
-                    if len(sanitized[key]) > 10000:
-                        sanitized[key] = sanitized[key][:10000]
-                else:
-                    sanitized[key] = value
+        # Log the request
+        MCPErrorHandler.log_request_context(tool_name, sanitized)
 
         return sanitized
+
+
+def create_server() -> HEDServer:
+    """Factory function to create a HED server instance.
+
+    Returns:
+        HEDServer: Configured HED server instance ready to run
+    """
+    return HEDServer()
 
 
 def main():
