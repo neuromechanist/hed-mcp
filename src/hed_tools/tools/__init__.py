@@ -18,6 +18,14 @@ from .enhanced_column_analyzer import (
     create_enhanced_column_analyzer,
     analyze_columns_enhanced,
 )
+from .llm_preprocessor import (
+    LLMPreprocessor,
+    SamplingConfig,
+    ColumnSample,
+    ColumnClassification,
+    create_llm_preprocessor,
+    process_for_llm_classification,
+)
 
 __all__ = [
     # BIDS parser
@@ -32,4 +40,11 @@ __all__ = [
     "EnhancedColumnAnalyzer",
     "create_enhanced_column_analyzer",
     "analyze_columns_enhanced",
+    # LLM preprocessor
+    "LLMPreprocessor",
+    "SamplingConfig",
+    "ColumnSample",
+    "ColumnClassification",
+    "create_llm_preprocessor",
+    "process_for_llm_classification",
 ]
