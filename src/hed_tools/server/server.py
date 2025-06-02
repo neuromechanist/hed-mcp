@@ -10,6 +10,7 @@ import logging
 from pathlib import Path
 from typing import Dict, Any, Optional
 from pydantic import Field
+import warnings
 
 from mcp.server.fastmcp import FastMCP, Context
 
@@ -31,21 +32,22 @@ for logger_name in ["mcp", "mcp.server", "mcp.client", "mcp.shared"]:
 
 logger = logging.getLogger(__name__)
 
-# Import HED components with graceful degradation
+# Import components with graceful degradation
 try:
-    from hed_tools.hed_integration.hed_wrapper import HEDWrapper, HEDWrapperConfig
-    from hed_tools.hed_integration.validation import HEDValidator
-    from hed_tools.hed_integration.schema import SchemaManagerFacade
+    from hed_tools.hed_integration.hed_wrapper import HEDWrapper
     from hed_tools.tools.column_analyzer import ColumnAnalyzer
+    from hed_tools.hed_integration.validation import HEDValidator
+    from hed_tools.hed_integration.schema import SchemaHandler, SchemaManagerFacade
 
     HED_AVAILABLE = True
     logger.info("HED components loaded successfully")
 except ImportError as e:
-    logger.warning(f"HED components not available: {e}")
+    warnings.warn(f"Could not import HED components: {e}")
     HEDWrapper = None
-    HEDValidator = None
-    SchemaManagerFacade = None
     ColumnAnalyzer = None
+    HEDValidator = None
+    SchemaHandler = None
+    SchemaManagerFacade = None
     HED_AVAILABLE = False
 
 # Create FastMCP server instance
@@ -55,41 +57,62 @@ mcp = FastMCP("HED Validation Server")
 _schema_cache: Dict[str, Any] = {}
 _initialized = False
 
+# Global schema handler
+_schema_handler: Optional[SchemaHandler] = None
+_schema_manager: Optional[SchemaManagerFacade] = None
+
 
 async def _initialize_hed_components():
-    """Initialize HED components if available."""
-    global _initialized
-    if _initialized or not HED_AVAILABLE:
+    """Initialize HED components asynchronously."""
+    global _initialized, _schema_handler, _schema_manager
+
+    if _initialized:
         return
 
     try:
-        # Initialize with default schema
-        config = HEDWrapperConfig(hed_schema="8.3.0")
-        _schema_cache["default"] = config
+        if not HED_AVAILABLE:
+            logger.warning("HED components not available - running in stub mode")
+            _initialized = True
+            return
+
+        # Initialize schema handler and manager
+        if SchemaHandler is not None:
+            _schema_handler = SchemaHandler()
+            logger.info("Schema handler initialized")
+
+        if SchemaManagerFacade is not None:
+            _schema_manager = SchemaManagerFacade()
+            await _schema_manager.initialize()
+            logger.info("Schema manager initialized")
+
         _initialized = True
         logger.info("HED components initialized successfully")
+
     except Exception as e:
         logger.error(f"Failed to initialize HED components: {e}")
-        raise
+        _initialized = True  # Mark as initialized to avoid repeated attempts
 
 
 async def _ensure_schema_loaded(version: str = "8.3.0"):
     """Ensure HED schema is loaded and cached."""
-    if not HED_AVAILABLE:
-        raise RuntimeError("HED components are not available")
-
     await _initialize_hed_components()
 
-    if version not in _schema_cache:
-        try:
-            config = HEDWrapperConfig(hed_schema=version)
-            _schema_cache[version] = config
-            logger.debug(f"Loaded HED schema version {version}")
-        except Exception as e:
-            logger.error(f"Failed to load HED schema {version}: {e}")
-            raise
+    if not HED_AVAILABLE or _schema_handler is None:
+        logger.warning(f"Cannot load schema {version} - HED components not available")
+        return None
 
-    return _schema_cache[version]
+    try:
+        # Use schema handler to load schema
+        result = await _schema_handler.load_schema(version=version)
+        if result.success:
+            logger.info(f"Schema {version} loaded successfully")
+            return _schema_handler.get_schema()
+        else:
+            logger.error(f"Failed to load schema {version}: {result.error}")
+            return None
+    except Exception as e:
+        logger.error(f"Error loading schema {version}: {e}")
+        return None
 
 
 # HED Validation Tools
@@ -320,31 +343,162 @@ async def get_server_info(ctx: Optional[Context] = None) -> str:
 # HED Schema Resources
 
 
+@mcp.resource("hed://schemas/available")
+async def get_available_schemas() -> str:
+    """
+    List all available HED schema versions with detailed information.
+
+    Returns information about official HED schema versions that can be loaded.
+    """
+    await _initialize_hed_components()
+
+    if not HED_AVAILABLE or _schema_handler is None:
+        return "Error: HED components are not available"
+
+    try:
+        # Get available schemas from the schema handler
+        available_schemas = _schema_handler.get_available_schemas()
+        loaded_versions = _schema_handler.get_loaded_schema_versions()
+
+        result = "Available HED Schema Versions\n"
+        result += "=" * 40 + "\n\n"
+
+        for schema_info in available_schemas:
+            version = schema_info.get("version", "unknown")
+            description = schema_info.get("description", "No description available")
+            status = "✓ Cached" if version in loaded_versions else "○ Available"
+
+            result += f"{status} {version}\n"
+            result += f"   Description: {description}\n\n"
+
+        # Add cache information
+        cache_info = _schema_handler.get_cache_info()
+        result += "Cache Status:\n"
+        result += f"  - Cached schemas: {cache_info.get('cached_count', 0)}\n"
+        result += f"  - Cache size: {cache_info.get('cache_size_mb', 0):.1f} MB\n"
+
+        return result
+
+    except Exception as e:
+        error_msg = f"Failed to retrieve available schemas: {str(e)}"
+        logger.error(error_msg)
+        return error_msg
+
+
 @mcp.resource("hed://schema/{version}")
 async def get_hed_schema_info(version: str) -> str:
     """
     Provide detailed information about a specific HED schema version.
 
-    Returns schema metadata, tag hierarchy, and validation rules.
+    Returns schema metadata, tag hierarchy summary, and validation capabilities.
     """
-    if not HED_AVAILABLE:
+    await _initialize_hed_components()
+
+    if not HED_AVAILABLE or _schema_handler is None:
         return "Error: HED components are not available"
 
     try:
-        await _ensure_schema_loaded(version)
+        # Load the specific schema
+        schema_result = await _schema_handler.load_schema(version=version)
 
-        # This would return actual schema information
+        if not schema_result.success:
+            return (
+                f"Error: Could not load schema version {version}: {schema_result.error}"
+            )
+
+        schema_info = _schema_handler.get_schema_info()
+        all_tags = _schema_handler.get_all_schema_tags(version=version)
+
         result = f"HED Schema Version {version}\n"
-        result += "=" * 30 + "\n"
-        result += "Status: Available\n"
-        result += f"Cached: {'Yes' if version in _schema_cache else 'No'}\n"
-        result += "Tags: ~1000+ hierarchical tags\n"
-        result += "Format: XML-based schema definition\n"
+        result += "=" * 50 + "\n\n"
+
+        if schema_info:
+            result += f"Version: {schema_info.version}\n"
+            result += f"Library: {schema_info.library}\n"
+            result += f"Name: {schema_info.name}\n"
+            result += f"Description: {schema_info.description}\n"
+            result += f"Filename: {schema_info.filename}\n\n"
+
+        # Tag statistics
+        result += "Tag Information:\n"
+        result += f"  - Total tags: {len(all_tags)}\n"
+        result += f"  - Loading time: {schema_result.processing_time:.3f}s\n\n"
+
+        # Sample of available tags (first 10)
+        if all_tags:
+            sample_tags = sorted(list(all_tags))[:10]
+            result += "Sample Tags:\n"
+            for tag in sample_tags:
+                result += f"  - {tag}\n"
+            if len(all_tags) > 10:
+                result += f"  ... and {len(all_tags) - 10} more\n"
 
         return result
 
     except Exception as e:
-        return f"Error retrieving schema {version}: {str(e)}"
+        error_msg = f"Error retrieving schema {version}: {str(e)}"
+        logger.error(error_msg)
+        return error_msg
+
+
+@mcp.resource("hed://schema/{version}/tags")
+async def get_schema_tags(version: str) -> str:
+    """
+    Get all tags available in a specific HED schema version.
+
+    Returns a comprehensive list of all tags in the schema.
+    """
+    await _initialize_hed_components()
+
+    if not HED_AVAILABLE or _schema_handler is None:
+        return "Error: HED components are not available"
+
+    try:
+        # Load the schema if needed
+        await _ensure_schema_loaded(version)
+
+        # Get all tags for this version
+        all_tags = _schema_handler.get_all_schema_tags(version=version)
+
+        if not all_tags:
+            return f"No tags found for schema version {version}"
+
+        # Organize tags by hierarchy
+        sorted_tags = sorted(list(all_tags))
+
+        result = f"All Tags in HED Schema {version}\n"
+        result += "=" * 50 + "\n\n"
+        result += f"Total tags: {len(sorted_tags)}\n\n"
+
+        # Group tags by top-level category
+        categories = {}
+        for tag in sorted_tags:
+            if "/" in tag:
+                category = tag.split("/")[0]
+            else:
+                category = tag
+
+            if category not in categories:
+                categories[category] = []
+            if tag != category:  # Don't duplicate the category itself
+                categories[category].append(tag)
+
+        # Display organized tags
+        for category in sorted(categories.keys()):
+            result += f"\n{category}:\n"
+            for tag in sorted(categories[category])[
+                :50
+            ]:  # Limit to first 50 per category
+                result += f"  - {tag}\n"
+            if len(categories[category]) > 50:
+                result += f"  ... and {len(categories[category]) - 50} more in this category\n"
+
+        return result
+
+    except Exception as e:
+        error_msg = f"Error retrieving tags for schema {version}: {str(e)}"
+        logger.error(error_msg)
+        return error_msg
 
 
 @mcp.resource("hed://validation/rules")
@@ -354,30 +508,57 @@ async def get_validation_rules() -> str:
 
     Returns structured documentation of validation rules applied by the server.
     """
+    await _initialize_hed_components()
+
     rules = """
-HED Validation Rules
-===================
+HED Validation Rules and Guidelines
+==================================
 
-1. Syntax Rules:
-   - Tags must be properly formatted
-   - Required tags must be present
-   - Tag hierarchy must be valid
+1. SYNTAX RULES:
+   • Tags must use proper formatting with forward slashes for hierarchy
+   • Required tags must be present in annotations
+   • Tag values must match expected data types (numeric, text, etc.)
+   • Parentheses must be balanced for grouping
+   • Commas separate multiple tags or tag groups
 
-2. Semantic Rules:
-   - Value constraints must be satisfied
-   - Units must be appropriate for tags
-   - Temporal relationships must be logical
+2. SEMANTIC RULES:
+   • All tags must exist in the specified HED schema
+   • Value constraints must be satisfied (e.g., units, ranges)
+   • Temporal relationships must be logically consistent
+   • Required tags for specific contexts must be present
 
-3. Error Types:
-   - ERROR: Critical validation failures
-   - WARNING: Style or recommendation issues
-   - INFO: Suggestions for improvement
+3. SCHEMA COMPLIANCE:
+   • Tags must exist in the loaded schema version
+   • Deprecated tags generate warnings
+   • Extension rules apply for custom tags (use # prefix)
+   • Tag attributes must match schema definitions
 
-4. Schema Compliance:
-   - All tags must exist in specified schema
-   - Deprecated tags generate warnings
-   - Extension rules apply for custom tags
+4. ERROR TYPES:
+   • ERROR: Critical validation failures that prevent processing
+   • WARNING: Style issues or recommendations for improvement
+   • INFO: Suggestions and best practices
+
+5. VALIDATION PROCESS:
+   • String parsing and syntax checking
+   • Schema lookup and tag validation
+   • Semantic rule application
+   • Error reporting with line numbers and suggestions
+
+6. SUPPORTED FORMATS:
+   • Raw HED strings (comma-separated tags)
+   • TSV files with HED columns
+   • JSON sidecars with HED annotations
+   • BIDS-compatible event files
 """
+
+    # Add server-specific information if available
+    if HED_AVAILABLE and _schema_handler is not None:
+        loaded_versions = _schema_handler.get_loaded_schema_versions()
+        if loaded_versions:
+            rules += "\n\nCURRENTLY AVAILABLE SCHEMAS:\n"
+            for version in loaded_versions:
+                rules += f"   • HED {version}\n"
+
     return rules
 
 
