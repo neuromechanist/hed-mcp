@@ -8,14 +8,8 @@ from .bids_parser import (
     BIDSValidationError,
     parse_bids_events,
 )
-from .column_analyzer import (
-    ColumnAnalyzer,
-    create_column_analyzer,
-    analyze_columns,
-)
 from .enhanced_column_analyzer import (
     EnhancedColumnAnalyzer,
-    create_enhanced_column_analyzer,
     analyze_columns_enhanced,
 )
 from .llm_preprocessor import (
@@ -26,25 +20,40 @@ from .llm_preprocessor import (
     create_llm_preprocessor,
     process_for_llm_classification,
 )
+from .column_analysis_engine import (
+    BIDSColumnAnalysisEngine,
+    AnalysisConfig,
+    FileAnalysisResult,
+    BatchAnalysisResult,
+    create_analysis_engine,
+    analyze_bids_files,
+    analyze_bids_directory,
+)
+from .cli import cli_main
 
 __all__ = [
-    # BIDS parser
+    # Parsing
     "BIDSEventParser",
     "BIDSValidationError",
     "parse_bids_events",
-    # Column analyzer
-    "ColumnAnalyzer",
-    "create_column_analyzer",
-    "analyze_columns",
-    # Enhanced column analyzer
+    # Enhanced Analysis
     "EnhancedColumnAnalyzer",
-    "create_enhanced_column_analyzer",
     "analyze_columns_enhanced",
-    # LLM preprocessor
+    # LLM Preprocessor
     "LLMPreprocessor",
     "SamplingConfig",
     "ColumnSample",
     "ColumnClassification",
     "create_llm_preprocessor",
     "process_for_llm_classification",
+    # Analysis Engine
+    "BIDSColumnAnalysisEngine",
+    "AnalysisConfig",
+    "FileAnalysisResult",
+    "BatchAnalysisResult",
+    "create_analysis_engine",
+    "analyze_bids_files",
+    "analyze_bids_directory",
+    # CLI
+    "cli_main",
 ]
