@@ -39,7 +39,7 @@ dependencies = [
     "numpy>=1.21.0",
     "pydantic>=2.0.0",
     "pydantic-settings>=2.0.0",
-    "mcp>=1.0.0",
+    "mcp>=1.8.0",
     "hedtools>=0.5.0",
 ]
 
