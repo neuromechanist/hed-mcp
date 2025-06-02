@@ -7,7 +7,7 @@ in a consistent manner, abstracting the complexity of the underlying hed.schema 
 import asyncio
 import logging
 import time
-from typing import Optional, Dict, Any, List, Union
+from typing import Optional, Dict, Any, List
 from pathlib import Path
 from concurrent.futures import ThreadPoolExecutor
 
@@ -49,8 +49,8 @@ class SchemaHandler:
             logger.warning("HED library not available - schema handler will run in stub mode")
     
     async def load_schema(self, version: Optional[str] = None, 
-                         custom_path: Optional[Path] = None,
-                         force_reload: bool = False) -> OperationResult:
+                          custom_path: Optional[Path] = None,
+                          force_reload: bool = False) -> OperationResult:
         """Load HED schema asynchronously with fallback support.
         
         Args:

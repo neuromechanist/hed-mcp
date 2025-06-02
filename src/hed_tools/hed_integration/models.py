@@ -4,7 +4,7 @@ This module defines data models for configuration options, input/output data str
 and API interfaces used throughout the HED integration system.
 """
 
-from typing import Optional, Dict, Any, List, Union, Literal
+from typing import Optional, Dict, Any, List
 from pathlib import Path
 from pydantic import BaseModel, Field, validator, root_validator
 import pandas as pd
@@ -15,11 +15,15 @@ class SchemaConfig(BaseModel):
     
     version: str = Field(default="8.3.0", description="HED schema version to use")
     custom_path: Optional[Path] = Field(default=None, description="Path to custom schema file")
-    cache_dir: Path = Field(default_factory=lambda: Path.home() / ".hed_cache", 
-                           description="Directory for caching schema files")
+    cache_dir: Path = Field(
+        default_factory=lambda: Path.home() / ".hed_cache", 
+        description="Directory for caching schema files"
+    )
     auto_update: bool = Field(default=True, description="Automatically update schema cache")
-    fallback_versions: List[str] = Field(default_factory=lambda: ["8.3.0", "8.2.0", "8.1.0"],
-                                       description="Fallback versions if primary fails")
+    fallback_versions: List[str] = Field(
+        default_factory=lambda: ["8.3.0", "8.2.0", "8.1.0"],
+        description="Fallback versions if primary fails"
+    )
     
     @validator('version')
     def validate_version(cls, v):
@@ -57,10 +61,14 @@ class ValidationConfig(BaseModel):
 class TabularSummaryConfig(BaseModel):
     """Configuration for TabularSummary operations."""
     
-    skip_columns: List[str] = Field(default_factory=lambda: ["onset", "duration", "sample"],
-                                   description="Columns to skip in analysis")
-    value_columns: Optional[List[str]] = Field(default=None, 
-                                              description="Specific columns to treat as value columns")
+    skip_columns: List[str] = Field(
+        default_factory=lambda: ["onset", "duration", "sample"],
+        description="Columns to skip in analysis"
+    )
+    value_columns: Optional[List[str]] = Field(
+        default=None, 
+        description="Specific columns to treat as value columns"
+    )
     name: str = Field(default="", description="Name for the summary")
     include_description: bool = Field(default=True, description="Include descriptions in output")
     max_unique_values: int = Field(default=50, description="Maximum unique values to include")
@@ -98,8 +106,10 @@ class ColumnInfo(BaseModel):
     is_categorical: bool = Field(description="Whether column is categorical")
     is_numeric: bool = Field(description="Whether column is numeric")
     is_temporal: bool = Field(description="Whether column is temporal")
-    suggested_hed_category: Optional[str] = Field(default=None, 
-                                                 description="Suggested HED category")
+    suggested_hed_category: Optional[str] = Field(
+        default=None, 
+        description="Suggested HED category"
+    )
     
     @validator('unique_count', 'null_count')
     def validate_counts(cls, v):
@@ -191,8 +201,10 @@ class SchemaInfo(BaseModel):
     path: Optional[Path] = Field(default=None, description="Path to schema file")
     tag_count: int = Field(default=0, description="Number of tags in schema")
     description: str = Field(default="", description="Schema description")
-    library_schemas: List[str] = Field(default_factory=list, 
-                                     description="Associated library schemas")
+    library_schemas: List[str] = Field(
+        default_factory=list, 
+        description="Associated library schemas"
+    )
     
     @validator('tag_count')
     def validate_tag_count(cls, v):
