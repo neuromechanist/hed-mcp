@@ -31,6 +31,12 @@ Usage Examples:
     ...     print(f"File: {result['file']}, Valid: {result['validation_result'].is_valid}")
 """
 
+import json
+from pathlib import Path
+from typing import Any, Dict, Optional, Union
+
+import pandas as pd
+
 __version__ = "0.1.0"
 
 # Core wrapper and main interface
@@ -87,6 +93,20 @@ from .models import (
     SidecarTemplate,
 )
 
+# Import remodeling interface
+from .remodeling import (
+    RemodelingInterface,
+    RemodelingError,
+    OperationRegistry,
+    ExecutionContext,
+    FactorHedTagsHandler,
+    RemapColumnsHandler,
+    FilterEventsHandler,
+    SummarizeHedTagsHandler,
+    MergeConsecutiveEventsHandler,
+    create_remodeling_interface,
+)
+
 # Convenience imports for common workflows
 __all__ = [
     # Main wrapper
@@ -129,6 +149,17 @@ __all__ = [
     "OperationResult",
     "ValidationResult",
     "SidecarTemplate",
+    # Remodeling interface
+    "RemodelingInterface",
+    "RemodelingError",
+    "OperationRegistry",
+    "ExecutionContext",
+    "FactorHedTagsHandler",
+    "RemapColumnsHandler",
+    "FilterEventsHandler",
+    "SummarizeHedTagsHandler",
+    "MergeConsecutiveEventsHandler",
+    "create_remodeling_interface",
 ]
 
 
@@ -198,3 +229,79 @@ async def quick_validate_bids_dataset(dataset_path: str) -> dict:
         "warning_count": len(result["warnings"]),
         "summary": result["summary"],
     }
+
+
+# Add remodeling interface convenience functions
+async def quick_remodel_events(
+    data: Union[pd.DataFrame, Path, str],
+    template: Union[Dict[str, Any], Path, str],
+    schema_version: Optional[str] = None,
+    cache_dir: Optional[Path] = None,
+) -> Dict[str, Any]:
+    """Quick remodeling of events data using JSON template.
+
+    Args:
+        data: Events data (DataFrame, file path, or content)
+        template: Remodeling template (dict, file path, or JSON string)
+        schema_version: HED schema version to use
+        cache_dir: Optional cache directory for intermediate results
+
+    Returns:
+        Remodeling results dictionary
+
+    Raises:
+        RemodelingError: If remodeling fails
+    """
+    # Load data if it's a file path
+    if isinstance(data, (str, Path)):
+        data = pd.read_csv(data, sep="\t")
+
+    # Load template if it's a file path or JSON string
+    if isinstance(template, (str, Path)):
+        if Path(template).exists():
+            with open(template, "r") as f:
+                template = json.load(f)
+        else:
+            # Try to parse as JSON string
+            template = json.loads(template)
+
+    # Create remodeling interface
+    interface = await create_remodeling_interface(schema_version, cache_dir)
+
+    # Execute operations
+    return await interface.execute_operations(template, data)
+
+
+async def quick_generate_remodeling_template(
+    operation_type: str, parameters: Dict[str, Any]
+) -> Dict[str, Any]:
+    """Generate a simple remodeling template for common operations.
+
+    Args:
+        operation_type: Type of operation (factor_hed_tags, filter_events, etc.)
+        parameters: Operation parameters
+
+    Returns:
+        Generated template dictionary
+    """
+    interface = RemodelingInterface()
+
+    if operation_type == "factor_hed_tags":
+        columns = parameters.get("columns", ["HED"])
+        return interface.generate_factor_template(columns, "hed_tags")
+    else:
+        # Generic single-operation template
+        return {
+            "name": f"{operation_type}_template",
+            "description": f"Template for {operation_type} operation",
+            "version": "1.0",
+            "operations": [
+                {
+                    "operation": operation_type,
+                    "parameters": parameters,
+                    "required_inputs": ["input_data"],
+                    "output_name": "result",
+                    "description": f"Execute {operation_type} operation",
+                }
+            ],
+        }
