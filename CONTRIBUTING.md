@@ -209,10 +209,10 @@ def test_function_name():
     """Test description explaining what is being tested."""
     # Arrange
     input_data = create_test_data()
-    
+
     # Act
     result = function_under_test(input_data)
-    
+
     # Assert
     assert result.is_valid
     assert len(result.errors) == 0
@@ -313,18 +313,18 @@ When creating a PR, please:
 ```python
 async def analyze_events_file(self, file_path: Path) -> Dict[str, Any]:
     """Analyze BIDS events file structure and columns.
-    
+
     Args:
         file_path: Path to BIDS events file (TSV or CSV)
-        
+
     Returns:
         Comprehensive analysis including column classification
         and HED annotation recommendations.
-        
+
     Raises:
         FileNotFoundError: If the events file doesn't exist
         ValueError: If the file format is not supported
-        
+
     Examples:
         >>> analyzer = BIDSColumnAnalyzer()
         >>> result = await analyzer.analyze_events_file(Path("events.tsv"))
@@ -425,4 +425,4 @@ If you have questions not covered here:
 2. Search [existing issues](https://github.com/hed-standard/hed-mcp/issues)
 3. Open a [new issue](https://github.com/hed-standard/hed-mcp/issues/new)
 
-Thank you for contributing to the HED MCP Server project! 🎉 
+Thank you for contributing to the HED MCP Server project! 🎉

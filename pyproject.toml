@@ -12,7 +12,7 @@ maintainers = [
 ]
 keywords = [
     "hed",
-    "hierarchical-event-descriptors", 
+    "hierarchical-event-descriptors",
     "mcp",
     "model-context-protocol",
     "bids",
@@ -27,20 +27,19 @@ classifiers = [
     "License :: OSI Approved :: BSD License",
     "Operating System :: OS Independent",
     "Programming Language :: Python :: 3",
-    "Programming Language :: Python :: 3.9",
     "Programming Language :: Python :: 3.10",
     "Programming Language :: Python :: 3.11",
     "Programming Language :: Python :: 3.12",
     "Topic :: Scientific/Engineering",
     "Topic :: Software Development :: Libraries :: Python Modules",
 ]
-requires-python = ">=3.9"
+requires-python = ">=3.10"
 dependencies = [
     "pandas>=2.0.0",
     "numpy>=1.21.0",
     "pydantic>=2.0.0",
     "pydantic-settings>=2.0.0",
-    "mcp>=1.0.0",
+    "mcp>=1.8.0",
     "hedtools>=0.5.0",
 ]
 
@@ -70,7 +69,7 @@ packages = ["src/hed_tools"]
 
 [tool.black]
 line-length = 100
-target-version = ['py39', 'py310', 'py311', 'py312']
+target-version = ['py310', 'py311', 'py312']
 include = '\.pyi?$'
 extend-exclude = '''
 /(
@@ -97,7 +96,7 @@ ensure_newline_before_comments = true
 known_first_party = ["hed_tools"]
 
 [tool.mypy]
-python_version = "3.9"
+python_version = "3.10"
 warn_return_any = true
 warn_unused_configs = true
 
@@ -109,6 +108,7 @@ markers = [
     "slow: marks tests as slow (deselected with -m 'not slow')",
     "integration: marks tests as integration tests",
     "unit: marks tests as unit tests",
+    "asyncio: marks tests as async tests",
 ]
 
 [tool.coverage.run]
