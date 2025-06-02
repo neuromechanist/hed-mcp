@@ -41,6 +41,7 @@ dependencies = [
     "pydantic-settings>=2.0.0",
     "mcp>=1.8.0",
     "hedtools>=0.5.0",
+    "psutil>=7.0.0",
 ]
 
 [project.optional-dependencies]
@@ -143,6 +144,16 @@ output = "coverage.xml"
 [build-system]
 requires = ["hatchling", "hatch-vcs"]
 build-backend = "hatchling.build"
+
+[dependency-groups]
+dev = [
+    "aiofiles>=24.1.0",
+    "aioresponses>=0.7.8",
+    "pytest>=8.3.5",
+    "pytest-asyncio>=1.0.0",
+    "pytest-cov>=6.1.1",
+    "ruff>=0.11.12",
+]
 
 [tool.hatch.metadata]
 allow-direct-references = true
