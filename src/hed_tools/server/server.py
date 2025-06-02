@@ -4,34 +4,372 @@ This module provides the main MCP server implementation for HED (Hierarchical Ev
 tools integration, including column analysis and sidecar generation capabilities.
 """
 
-import anyio
+import asyncio
 import logging
+import warnings
+from datetime import datetime
 from typing import Any, Dict, List
+import time
+import hashlib
+import secrets
+from functools import wraps
 
 import mcp.types as types
 from mcp.server.lowlevel import Server
 from mcp.server.stdio import stdio_server
 
+# Import components with graceful degradation
+try:
+    from hed_tools.hed_integration.hed_wrapper import HEDWrapper
+    from hed_tools.tools.column_analyzer import ColumnAnalyzer
+    from hed_tools.tools.hed_validator import HEDValidator
+    from hed_tools.tools.performance_optimizer import PerformanceOptimizer
+    from hed_tools.utils.error_handler import ErrorHandler
+    from hed_tools.utils.logger import setup_logger
+except ImportError as e:
+    warnings.warn(f"Could not import HED components: {e}")
+    HEDWrapper = None
+    ColumnAnalyzer = None
+    HEDValidator = None
+    PerformanceOptimizer = None
+    ErrorHandler = None
+    setup_logger = None
+
 # Set up logging
 logging.basicConfig(
     level=logging.INFO, format="%(asctime)s - %(name)s - %(levelname)s - %(message)s"
 )
-logger = logging.getLogger(__name__)
+logger = setup_logger(__name__) if setup_logger else logging.getLogger(__name__)
+
+
+# Security configuration
+class SecurityConfig:
+    """Security configuration for production deployment."""
+
+    def __init__(self):
+        self.api_key_header = "X-API-Key"
+        self.max_request_size = 10 * 1024 * 1024  # 10MB
+        self.rate_limit_window = 60  # seconds
+        self.rate_limit_requests = 100  # per window
+        self.session_timeout = 3600  # 1 hour
+        self.allowed_file_types = [".tsv", ".csv", ".txt"]
+        self.max_file_size = 50 * 1024 * 1024  # 50MB
+
+    def generate_session_token(self) -> str:
+        """Generate a secure session token."""
+        return secrets.token_urlsafe(32)
+
+    def hash_api_key(self, api_key: str) -> str:
+        """Hash API key for secure storage."""
+        return hashlib.sha256(api_key.encode()).hexdigest()
+
+
+# Rate limiting decorator
+def rate_limit(max_requests: int = 100, window_seconds: int = 60):
+    """Rate limiting decorator for tool methods."""
+    request_history = {}
+
+    def decorator(func):
+        @wraps(func)
+        async def wrapper(self, *args, **kwargs):
+            client_id = getattr(self, "_client_id", "default")
+            current_time = time.time()
+
+            # Clean old entries
+            if client_id in request_history:
+                request_history[client_id] = [
+                    req_time
+                    for req_time in request_history[client_id]
+                    if current_time - req_time < window_seconds
+                ]
+            else:
+                request_history[client_id] = []
+
+            # Check rate limit
+            if len(request_history[client_id]) >= max_requests:
+                error_msg = f"Rate limit exceeded: {max_requests} requests per {window_seconds} seconds"
+                logger.warning(f"Rate limit exceeded for client {client_id}")
+                raise ValueError(error_msg)
+
+            # Add current request
+            request_history[client_id].append(current_time)
+
+            return await func(self, *args, **kwargs)
+
+        return wrapper
+
+    return decorator
+
+
+# Error handling decorators and utilities
+class MCPErrorHandler:
+    """Centralized error handling for MCP protocol compliance."""
+
+    @staticmethod
+    def handle_tool_error(tool_name: str):
+        """Decorator for standardized tool error handling."""
+
+        def decorator(func):
+            @wraps(func)
+            async def wrapper(*args, **kwargs):
+                try:
+                    return await func(*args, **kwargs)
+                except ValueError as e:
+                    logger.error(f"Validation error in {tool_name}: {e}")
+                    return [
+                        types.TextContent(
+                            type="text",
+                            text=(
+                                f"❌ {tool_name} Error\n\n"
+                                f"Validation failed: {str(e)}\n\n"
+                                f"Please check your parameters and try again."
+                            ),
+                        )
+                    ]
+                except FileNotFoundError as e:
+                    logger.error(f"File not found in {tool_name}: {e}")
+                    return [
+                        types.TextContent(
+                            type="text",
+                            text=(
+                                f"❌ {tool_name} Error\n\n"
+                                f"File not found: {str(e)}\n\n"
+                                f"Please verify the file path exists and is accessible."
+                            ),
+                        )
+                    ]
+                except PermissionError as e:
+                    logger.error(f"Permission error in {tool_name}: {e}")
+                    return [
+                        types.TextContent(
+                            type="text",
+                            text=(
+                                f"❌ {tool_name} Error\n\n"
+                                f"Permission denied: {str(e)}\n\n"
+                                f"Please check file permissions and access rights."
+                            ),
+                        )
+                    ]
+                except asyncio.TimeoutError as e:
+                    logger.error(f"Timeout in {tool_name}: {e}")
+                    return [
+                        types.TextContent(
+                            type="text",
+                            text=(
+                                f"❌ {tool_name} Error\n\n"
+                                f"Operation timed out: {str(e)}\n\n"
+                                f"The operation took too long to complete. "
+                                f"Please try again or reduce the data size."
+                            ),
+                        )
+                    ]
+                except Exception as e:
+                    logger.error(f"Unexpected error in {tool_name}: {e}", exc_info=True)
+                    return [
+                        types.TextContent(
+                            type="text",
+                            text=(
+                                f"❌ {tool_name} Error\n\n"
+                                f"Unexpected error occurred: {str(e)}\n\n"
+                                f"This has been logged for investigation. "
+                                f"Please try again or contact support."
+                            ),
+                        )
+                    ]
+
+            return wrapper
+
+        return decorator
+
+    @staticmethod
+    def log_request_context(tool_name: str, arguments: Dict[str, Any]):
+        """Log request context for debugging and auditing."""
+        sanitized_args = MCPErrorHandler._sanitize_arguments(arguments)
+        logger.info(
+            f"Tool request: {tool_name}",
+            extra={
+                "tool": tool_name,
+                "arguments": sanitized_args,
+                "timestamp": datetime.utcnow().isoformat(),
+                "request_id": secrets.token_hex(8),
+            },
+        )
+
+    @staticmethod
+    def _sanitize_arguments(arguments: Dict[str, Any]) -> Dict[str, Any]:
+        """Remove sensitive information from arguments for logging."""
+        sensitive_keys = ["api_key", "token", "password", "secret"]
+        sanitized = {}
+
+        for key, value in arguments.items():
+            if any(sensitive in key.lower() for sensitive in sensitive_keys):
+                sanitized[key] = "[REDACTED]"
+            elif isinstance(value, str) and len(value) > 200:
+                sanitized[key] = f"{value[:200]}... [TRUNCATED]"
+            else:
+                sanitized[key] = value
+
+        return sanitized
+
+
+# Input validation and sanitization
+class InputValidator:
+    """Comprehensive input validation and sanitization."""
+
+    @staticmethod
+    def validate_file_path(file_path: str, security_config: SecurityConfig) -> str:
+        """Validate and sanitize file path."""
+        if not file_path or not isinstance(file_path, str):
+            raise ValueError("File path must be a non-empty string")
+
+        # Remove null bytes and normalize path
+        file_path = file_path.replace("\0", "").strip()
+
+        # Check for directory traversal attempts
+        if ".." in file_path or file_path.startswith("/"):
+            raise ValueError("Invalid file path: directory traversal not allowed")
+
+        # Check file extension
+        import os
+
+        _, ext = os.path.splitext(file_path.lower())
+        if ext not in security_config.allowed_file_types:
+            raise ValueError(
+                f"File type {ext} not allowed. Allowed types: {security_config.allowed_file_types}"
+            )
+
+        return file_path
+
+    @staticmethod
+    def validate_column_list(columns: List[str]) -> List[str]:
+        """Validate and sanitize column list."""
+        if not isinstance(columns, list):
+            raise ValueError("Columns must be provided as a list")
+
+        sanitized = []
+        for col in columns:
+            if not isinstance(col, str):
+                raise ValueError("Column names must be strings")
+
+            # Remove dangerous characters
+            sanitized_col = col.replace("\0", "").strip()
+            if not sanitized_col:
+                continue
+
+            sanitized.append(sanitized_col)
+
+        return sanitized
+
+    @staticmethod
+    def validate_schema_version(version: str) -> str:
+        """Validate HED schema version."""
+        if not isinstance(version, str):
+            raise ValueError("Schema version must be a string")
+
+        # Basic format validation (major.minor.patch)
+        import re
+
+        if not re.match(r"^\d+\.\d+\.\d+$", version):
+            raise ValueError(
+                "Schema version must be in format 'major.minor.patch' (e.g., '8.3.0')"
+            )
+
+        return version.strip()
+
+
+# Performance monitoring
+class PerformanceMonitor:
+    """Monitor and log performance metrics."""
+
+    def __init__(self):
+        self.request_times = {}
+        self.request_counts = {}
+
+    def start_timer(self, operation: str) -> str:
+        """Start timing an operation."""
+        operation_id = f"{operation}_{secrets.token_hex(4)}"
+        self.request_times[operation_id] = time.time()
+        return operation_id
+
+    def end_timer(self, operation_id: str, operation: str):
+        """End timing and log performance."""
+        if operation_id in self.request_times:
+            duration = time.time() - self.request_times[operation_id]
+            del self.request_times[operation_id]
+
+            # Update counters
+            if operation not in self.request_counts:
+                self.request_counts[operation] = {"count": 0, "total_time": 0}
+
+            self.request_counts[operation]["count"] += 1
+            self.request_counts[operation]["total_time"] += duration
+
+            # Log performance
+            avg_time = (
+                self.request_counts[operation]["total_time"]
+                / self.request_counts[operation]["count"]
+            )
+
+            logger.info(
+                f"Performance: {operation}",
+                extra={
+                    "operation": operation,
+                    "duration": duration,
+                    "average_duration": avg_time,
+                    "total_requests": self.request_counts[operation]["count"],
+                },
+            )
+
+            # Warning for slow operations
+            if duration > 10.0:  # 10 seconds
+                logger.warning(
+                    f"Slow operation detected: {operation} took {duration:.2f}s"
+                )
+
+    def get_stats(self) -> Dict[str, Any]:
+        """Get performance statistics."""
+        stats = {}
+        for operation, data in self.request_counts.items():
+            stats[operation] = {
+                "total_requests": data["count"],
+                "total_time": data["total_time"],
+                "average_time": data["total_time"] / data["count"]
+                if data["count"] > 0
+                else 0,
+            }
+        return stats
 
 
 class HEDServer:
-    """MCP server for HED Tools integration.
+    """Production-ready MCP server for HED Tools integration.
 
     Provides tools for:
     - Analyzing BIDS event file columns for HED annotation
     - Generating HED sidecar templates
     - Validating HED annotations
+
+    Production features (Subtask 4.6):
+    - Comprehensive error handling and MCP protocol compliance
+    - Security middleware with input validation and rate limiting
+    - Performance monitoring and async optimization
+    - Request logging and audit trails
+    - Timeout handling for long-running operations
     """
 
     def __init__(self):
-        """Initialize the HED MCP Server."""
+        """Initialize the production-ready HED MCP Server."""
         self.server = Server("hed-tools")
         logger.info("HED MCP Server initialized")
+
+        # Initialize production components
+        self.security_config = SecurityConfig()
+        self.performance_monitor = PerformanceMonitor()
+        self._client_id = "default"  # Can be set from connection context
+
+        # Connection pool and async optimization settings
+        self.max_concurrent_requests = 10
+        self.request_timeout = 30.0  # seconds
+        self.semaphore = asyncio.Semaphore(self.max_concurrent_requests)
 
         # Try to initialize HED components but handle graceful degradation
         self.validator = None
@@ -170,19 +508,43 @@ class HEDServer:
         async def call_tool(
             name: str, arguments: Dict[str, Any]
         ) -> List[types.TextContent]:
-            """Handle tool calls."""
+            """Handle tool calls with production-ready security and monitoring."""
             try:
+                # Validate and sanitize arguments for security
+                sanitized_args = self._validate_and_sanitize_arguments(name, arguments)
+
+                # Route to appropriate tool with error handling and monitoring
                 if name == "validate_hed":
-                    return await self._validate_hed(arguments)
+                    return await self._with_timeout_and_monitoring(
+                        "validate_hed", self._validate_hed_with_security(sanitized_args)
+                    )
                 elif name == "analyze_event_columns":
-                    return await self._analyze_event_columns(arguments)
+                    return await self._with_timeout_and_monitoring(
+                        "analyze_event_columns",
+                        self._analyze_event_columns_with_security(sanitized_args),
+                    )
                 elif name == "generate_hed_sidecar":
-                    return await self._generate_hed_sidecar(arguments)
+                    return await self._with_timeout_and_monitoring(
+                        "generate_hed_sidecar",
+                        self._generate_hed_sidecar_with_security(sanitized_args),
+                    )
                 else:
+                    logger.error(f"Unknown tool requested: {name}")
                     raise ValueError(f"Unknown tool: {name}")
+
             except Exception as e:
                 logger.error(f"Tool call error for {name}: {e}")
-                raise ValueError(f"Tool execution failed: {str(e)}")
+                # Return standardized error response
+                return [
+                    types.TextContent(
+                        type="text",
+                        text=(
+                            f"❌ Tool Error: {name}\n\n"
+                            f"Request failed: {str(e)}\n\n"
+                            f"Please check your request and try again."
+                        ),
+                    )
+                ]
 
     def _register_resources(self):
         """Register MCP resources for HED schemas and metadata."""
@@ -205,6 +567,30 @@ class HEDServer:
                 return await self._get_schema_info()
             else:
                 raise ValueError(f"Unknown resource: {uri}")
+
+    @MCPErrorHandler.handle_tool_error("validate_hed")
+    @rate_limit(max_requests=50, window_seconds=60)
+    async def _validate_hed_with_security(
+        self, arguments: Dict[str, Any]
+    ) -> List[types.TextContent]:
+        """Validate HED annotation with production security."""
+        return await self._validate_hed(arguments)
+
+    @MCPErrorHandler.handle_tool_error("analyze_event_columns")
+    @rate_limit(max_requests=20, window_seconds=60)
+    async def _analyze_event_columns_with_security(
+        self, arguments: Dict[str, Any]
+    ) -> List[types.TextContent]:
+        """Analyze event columns with production security."""
+        return await self._analyze_event_columns(arguments)
+
+    @MCPErrorHandler.handle_tool_error("generate_hed_sidecar")
+    @rate_limit(max_requests=10, window_seconds=60)
+    async def _generate_hed_sidecar_with_security(
+        self, arguments: Dict[str, Any]
+    ) -> List[types.TextContent]:
+        """Generate HED sidecar with production security."""
+        return await self._generate_hed_sidecar(arguments)
 
     async def _validate_hed(self, arguments: Dict[str, Any]) -> List[types.TextContent]:
         """Validate HED annotation."""
@@ -668,9 +1054,9 @@ class HEDServer:
         try:
             # Get schema information from our hed_schemas resource
             schema_info_json = await self._get_schema_info()
-            import json
+            import json as json_module
 
-            schema_data = json.loads(schema_info_json)
+            schema_data = json_module.loads(schema_info_json)
 
             schemas = schema_data.get("schemas", {})
             if schema_version in schemas:
@@ -983,15 +1369,15 @@ class HEDServer:
                 content_wrapper = "```yaml"
             except ImportError:
                 # Fallback to JSON if YAML not available
-                import json
+                import json as json_module
 
-                formatted_content = json.dumps(clean_sidecar, indent=2)
+                formatted_content = json_module.dumps(clean_sidecar, indent=2)
                 content_header = "JSON Sidecar Template (YAML not available):"
                 content_wrapper = "```json"
         else:
-            import json
+            import json as json_module
 
-            formatted_content = json.dumps(clean_sidecar, indent=2)
+            formatted_content = json_module.dumps(clean_sidecar, indent=2)
             content_header = "JSON Sidecar Template:"
             content_wrapper = "```json"
 
@@ -1024,6 +1410,8 @@ class HEDServer:
         - Includes version comparison functionality
         - Validates schema integrity
         """
+        import json as json_module
+
         try:
             # Comprehensive HED schema metadata up to 8.3.0
             base_schema_url = "https://raw.githubusercontent.com/hed-standard/hed-schemas/main/standard_schema/hedxml/"
@@ -1188,9 +1576,7 @@ class HEDServer:
                 },
             }
 
-            import json
-
-            return json.dumps(schema_info, indent=2)
+            return json_module.dumps(schema_info, indent=2)
 
         except Exception as e:
             logger.error(f"Enhanced schema info error: {e}")
@@ -1202,9 +1588,7 @@ class HEDServer:
                 "default_schema": "8.3.0",
                 "fallback_mode": True,
             }
-            import json
-
-            return json.dumps(basic_info, indent=2)
+            return json_module.dumps(basic_info, indent=2)
 
     def _get_current_timestamp(self) -> str:
         """Get current timestamp in ISO format."""
@@ -1221,6 +1605,64 @@ class HEDServer:
                 streams[0], streams[1], self.server.create_initialization_options()
             )
 
+    async def _with_timeout_and_monitoring(self, operation_name: str, coro):
+        """Execute operation with timeout and performance monitoring."""
+        timer_id = self.performance_monitor.start_timer(operation_name)
+
+        try:
+            async with self.semaphore:  # Limit concurrent operations
+                result = await asyncio.wait_for(coro, timeout=self.request_timeout)
+            self.performance_monitor.end_timer(timer_id, operation_name)
+            return result
+        except asyncio.TimeoutError:
+            self.performance_monitor.end_timer(timer_id, operation_name)
+            logger.error(f"Timeout in {operation_name} after {self.request_timeout}s")
+            raise
+        except Exception as e:
+            self.performance_monitor.end_timer(timer_id, operation_name)
+            logger.error(f"Error in {operation_name}: {e}")
+            raise
+
+    def _validate_and_sanitize_arguments(
+        self, tool_name: str, arguments: Dict[str, Any]
+    ) -> Dict[str, Any]:
+        """Validate and sanitize tool arguments for security."""
+        sanitized = {}
+
+        # Log request for auditing
+        MCPErrorHandler.log_request_context(tool_name, arguments)
+
+        for key, value in arguments.items():
+            if key == "file_path" and value:
+                # Enhanced file path validation
+                sanitized[key] = InputValidator.validate_file_path(
+                    value, self.security_config
+                )
+            elif key in ["value_cols", "skip_cols"] and value:
+                # Validate column lists
+                sanitized[key] = InputValidator.validate_column_list(value)
+            elif key == "schema_version" and value:
+                # Validate schema version format
+                sanitized[key] = InputValidator.validate_schema_version(value)
+            elif key == "max_unique_values" and value:
+                # Validate numerical parameters
+                if not isinstance(value, int) or value < 1 or value > 1000:
+                    sanitized[key] = 20  # Safe default
+                else:
+                    sanitized[key] = value
+            else:
+                # General sanitization for other parameters
+                if isinstance(value, str):
+                    # Remove null bytes and excessive whitespace
+                    sanitized[key] = value.replace("\0", "").strip()
+                    # Limit string length to prevent DoS
+                    if len(sanitized[key]) > 10000:
+                        sanitized[key] = sanitized[key][:10000]
+                else:
+                    sanitized[key] = value
+
+        return sanitized
+
 
 def main():
     """Main entry point for the server."""
@@ -1229,7 +1671,7 @@ def main():
     async def arun():
         await server.run()
 
-    anyio.run(arun)
+    asyncio.run(arun)
 
 
 if __name__ == "__main__":
