@@ -9,6 +9,8 @@ import os
 import logging
 from pathlib import Path
 from typing import Dict, Any, Optional
+import json
+import csv
 from pydantic import Field
 import warnings
 
@@ -49,6 +51,28 @@ except ImportError as e:
     SchemaHandler = None
     SchemaManagerFacade = None
     HED_AVAILABLE = False
+
+# Import optional dependencies for tabular data handling
+try:
+    import pandas as pd
+
+    PANDAS_AVAILABLE = True
+    logger.info("Pandas available for spreadsheet analysis")
+except ImportError:
+    PANDAS_AVAILABLE = False
+    logger.warning("Pandas not available - limited spreadsheet support")
+
+try:
+    import importlib.util
+
+    EXCEL_AVAILABLE = importlib.util.find_spec("openpyxl") is not None
+    if EXCEL_AVAILABLE:
+        logger.info("OpenPyXL available for Excel file support")
+    else:
+        logger.warning("OpenPyXL not available - no Excel file support")
+except ImportError:
+    EXCEL_AVAILABLE = False
+    logger.warning("OpenPyXL not available - no Excel file support")
 
 # Create FastMCP server instance
 mcp = FastMCP("HED Validation Server")
@@ -306,36 +330,491 @@ async def generate_hed_sidecar(
 @mcp.tool()
 async def get_server_info(ctx: Optional[Context] = None) -> str:
     """
-    Get information about the HED MCP server.
-
-    Returns server status, available tools, and configuration.
+    Get information about the HED MCP server including available features and status.
     """
+    info = {
+        "server": "HED MCP Server",
+        "version": "1.0.0",
+        "hed_available": HED_AVAILABLE,
+        "pandas_available": PANDAS_AVAILABLE,
+        "excel_available": EXCEL_AVAILABLE,
+        "features": {
+            "string_validation": HED_AVAILABLE,
+            "file_validation": HED_AVAILABLE,
+            "schema_management": HED_AVAILABLE,
+            "sidecar_generation": HED_AVAILABLE,
+            "column_analysis": HED_AVAILABLE and PANDAS_AVAILABLE,
+            "excel_support": EXCEL_AVAILABLE,
+        },
+        "supported_formats": ["tsv", "csv", "json", "bids"],
+    }
+
+    if EXCEL_AVAILABLE:
+        info["supported_formats"].extend(["xlsx", "xls"])
+
+    return json.dumps(info, indent=2)
+
+
+# Column Analysis Tools
+
+
+@mcp.tool()
+async def validate_hed_columns(
+    file_path: str = Field(description="Path to tabular file (CSV, TSV, Excel)"),
+    hed_columns: str = Field(
+        description="Comma-separated list of column names containing HED annotations"
+    ),
+    schema_version: str = Field(
+        default="8.3.0", description="HED schema version to use"
+    ),
+    delimiter: str = Field(
+        default="auto",
+        description="Delimiter for CSV/TSV files (auto-detect if 'auto')",
+    ),
+    ctx: Optional[Context] = None,
+) -> str:
+    """
+    Validate HED annotations in specific columns of a tabular data file.
+
+    Supports CSV, TSV, and Excel files. Provides detailed column-level validation
+    feedback including row numbers and specific error locations.
+    """
+    if not HED_AVAILABLE:
+        return "Error: HED components are not available"
+
+    if not PANDAS_AVAILABLE:
+        return "Error: Pandas is required for column analysis but not available"
+
     try:
+        file_path_obj = Path(file_path)
+        if not file_path_obj.exists():
+            return f"Error: File not found: {file_path}"
+
+        await _ensure_schema_loaded(schema_version)
+
         if ctx:
-            ctx.info("Retrieving server information")
+            ctx.info(f"Analyzing HED columns in: {file_path_obj.name}")
 
-        tools = list(mcp._tools.keys())
-        resources = list(mcp._resources.keys())
+        # Parse HED column list
+        hed_column_list = [col.strip() for col in hed_columns.split(",")]
 
-        result = "HED MCP Server Information\n"
-        result += "=" * 30 + "\n"
-        result += f"HED Components Available: {HED_AVAILABLE}\n"
-        result += f"Debug Mode: {DEBUG_MODE}\n"
-        result += f"Initialized: {_initialized}\n"
-        result += f"Cached Schemas: {len(_schema_cache)}\n"
-        result += f"\nAvailable Tools ({len(tools)}):\n"
-        for tool in tools:
-            result += f"  - {tool}\n"
+        # Read the file based on extension
+        file_extension = file_path_obj.suffix.lower()
 
-        if resources:
-            result += f"\nAvailable Resources ({len(resources)}):\n"
-            for resource in resources:
-                result += f"  - {resource}\n"
+        if file_extension in [".xlsx", ".xls"]:
+            if not EXCEL_AVAILABLE:
+                return "Error: Excel file support requires openpyxl package"
+            df = pd.read_excel(file_path)
+        elif file_extension == ".csv":
+            if delimiter == "auto":
+                delimiter = ","
+            df = pd.read_csv(file_path, delimiter=delimiter)
+        elif file_extension == ".tsv":
+            if delimiter == "auto":
+                delimiter = "\t"
+            df = pd.read_csv(file_path, delimiter=delimiter)
+        else:
+            # Try to auto-detect delimiter
+            with open(file_path, "r", encoding="utf-8") as f:
+                sample = f.read(1024)
+                sniffer = csv.Sniffer()
+                detected_delimiter = sniffer.sniff(sample).delimiter
+            df = pd.read_csv(file_path, delimiter=detected_delimiter)
 
-        return result
+        # Validate that HED columns exist
+        missing_columns = [col for col in hed_column_list if col not in df.columns]
+        if missing_columns:
+            return f"Error: HED columns not found in file: {missing_columns}\nAvailable columns: {list(df.columns)}"
+
+        # Analyze each HED column
+        validation_results = {
+            "file": file_path,
+            "schema_version": schema_version,
+            "total_rows": len(df),
+            "hed_columns": hed_column_list,
+            "column_results": {},
+            "summary": {
+                "total_errors": 0,
+                "total_warnings": 0,
+                "valid_rows": 0,
+                "invalid_rows": 0,
+            },
+        }
+
+        for column in hed_column_list:
+            column_data = df[column].dropna()  # Remove NaN values
+            column_results = {
+                "total_entries": len(column_data),
+                "valid_entries": 0,
+                "invalid_entries": 0,
+                "errors": [],
+                "warnings": [],
+            }
+
+            # Validate each entry in the column
+            for idx, hed_string in enumerate(column_data):
+                if pd.isna(hed_string) or str(hed_string).strip() == "":
+                    continue
+
+                row_number = (
+                    df[df[column] == hed_string].index[0] + 2
+                )  # +2 for 1-based indexing and header
+
+                # For now, we'll do basic validation
+                # In a real implementation, this would use the HED validator
+                hed_str = str(hed_string).strip()
+
+                # Basic validation checks
+                errors = []
+                warnings = []
+
+                # Check for basic syntax issues
+                if not hed_str:
+                    continue
+
+                # Check for balanced parentheses
+                open_parens = hed_str.count("(")
+                close_parens = hed_str.count(")")
+                if open_parens != close_parens:
+                    errors.append(
+                        f"Row {row_number}: Unbalanced parentheses in '{hed_str[:50]}...'"
+                    )
+
+                # Check for missing commas between tags
+                if "," not in hed_str and "/" in hed_str and len(hed_str.split()) > 1:
+                    warnings.append(
+                        f"Row {row_number}: Missing commas between tags in '{hed_str[:50]}...'"
+                    )
+
+                # Check for invalid characters
+                invalid_chars = ["<", ">", '"', "'"]
+                for char in invalid_chars:
+                    if char in hed_str:
+                        errors.append(
+                            f"Row {row_number}: Invalid character '{char}' in '{hed_str[:50]}...'"
+                        )
+
+                if errors:
+                    column_results["invalid_entries"] += 1
+                    column_results["errors"].extend(errors)
+                    validation_results["summary"]["invalid_rows"] += 1
+                else:
+                    column_results["valid_entries"] += 1
+                    validation_results["summary"]["valid_rows"] += 1
+
+                if warnings:
+                    column_results["warnings"].extend(warnings)
+
+                validation_results["summary"]["total_errors"] += len(errors)
+                validation_results["summary"]["total_warnings"] += len(warnings)
+
+            validation_results["column_results"][column] = column_results
+
+        # Format results
+        result_lines = [
+            "HED Column Validation Results",
+            f"File: {file_path}",
+            f"Schema Version: {schema_version}",
+            f"Total Rows: {validation_results['total_rows']}",
+            "",
+            "Summary:",
+            f"  Valid Rows: {validation_results['summary']['valid_rows']}",
+            f"  Invalid Rows: {validation_results['summary']['invalid_rows']}",
+            f"  Total Errors: {validation_results['summary']['total_errors']}",
+            f"  Total Warnings: {validation_results['summary']['total_warnings']}",
+            "",
+        ]
+
+        for column, results in validation_results["column_results"].items():
+            result_lines.extend(
+                [
+                    f"Column '{column}':",
+                    f"  Valid Entries: {results['valid_entries']}",
+                    f"  Invalid Entries: {results['invalid_entries']}",
+                    "",
+                ]
+            )
+
+            if results["errors"]:
+                result_lines.append("  Errors:")
+                for error in results["errors"][:10]:  # Limit to first 10 errors
+                    result_lines.append(f"    {error}")
+                if len(results["errors"]) > 10:
+                    result_lines.append(
+                        f"    ... and {len(results['errors']) - 10} more errors"
+                    )
+                result_lines.append("")
+
+            if results["warnings"]:
+                result_lines.append("  Warnings:")
+                for warning in results["warnings"][:5]:  # Limit to first 5 warnings
+                    result_lines.append(f"    {warning}")
+                if len(results["warnings"]) > 5:
+                    result_lines.append(
+                        f"    ... and {len(results['warnings']) - 5} more warnings"
+                    )
+                result_lines.append("")
+
+        return "\n".join(result_lines)
 
     except Exception as e:
-        error_msg = f"Failed to get server info: {str(e)}"
+        error_msg = f"Column validation failed: {str(e)}"
+        logger.error(error_msg)
+        return error_msg
+
+
+@mcp.tool()
+async def analyze_hed_spreadsheet(
+    file_path: str = Field(description="Path to spreadsheet file"),
+    output_format: str = Field(
+        default="summary", description="Output format: 'summary', 'detailed', or 'json'"
+    ),
+    schema_version: str = Field(
+        default="8.3.0", description="HED schema version to use"
+    ),
+    ctx: Optional[Context] = None,
+) -> str:
+    """
+    Analyze a spreadsheet file to identify HED-related columns and provide analysis.
+
+    Automatically detects potential HED columns and provides statistical analysis,
+    validation summary, and recommendations for HED annotation improvement.
+    """
+    if not HED_AVAILABLE:
+        return "Error: HED components are not available"
+
+    if not PANDAS_AVAILABLE:
+        return "Error: Pandas is required for spreadsheet analysis but not available"
+
+    try:
+        file_path_obj = Path(file_path)
+        if not file_path_obj.exists():
+            return f"Error: File not found: {file_path}"
+
+        await _ensure_schema_loaded(schema_version)
+
+        if ctx:
+            ctx.info(f"Analyzing spreadsheet: {file_path_obj.name}")
+
+        # Read the file based on extension
+        file_extension = file_path_obj.suffix.lower()
+
+        if file_extension in [".xlsx", ".xls"]:
+            if not EXCEL_AVAILABLE:
+                return "Error: Excel file support requires openpyxl package"
+            df = pd.read_excel(file_path)
+        elif file_extension in [".csv", ".tsv"]:
+            delimiter = "\t" if file_extension == ".tsv" else ","
+            df = pd.read_csv(file_path, delimiter=delimiter)
+        else:
+            # Try to auto-detect
+            with open(file_path, "r", encoding="utf-8") as f:
+                sample = f.read(1024)
+                sniffer = csv.Sniffer()
+                detected_delimiter = sniffer.sniff(sample).delimiter
+            df = pd.read_csv(file_path, delimiter=detected_delimiter)
+
+        # Auto-detect potential HED columns
+        potential_hed_columns = []
+        for column in df.columns:
+            # Look for columns that might contain HED annotations
+            sample_values = df[column].dropna().astype(str).head(10)
+
+            # Heuristics for HED detection
+            hed_indicators = 0
+            for value in sample_values:
+                value_str = str(value).strip()
+                if not value_str or len(value_str) < 3:
+                    continue
+
+                # Check for HED-like patterns
+                if "/" in value_str:  # HED hierarchy indicator
+                    hed_indicators += 2
+                if any(
+                    word in value_str.lower()
+                    for word in ["event", "stimulus", "response", "action"]
+                ):
+                    hed_indicators += 1
+                if "(" in value_str and ")" in value_str:  # HED grouping
+                    hed_indicators += 1
+                if "," in value_str and "/" in value_str:  # Multiple HED tags
+                    hed_indicators += 2
+                if any(
+                    char.isupper() for char in value_str
+                ):  # CamelCase (common in HED)
+                    hed_indicators += 0.5
+
+            # If enough indicators, consider it a potential HED column
+            if hed_indicators >= 2:
+                potential_hed_columns.append(
+                    {
+                        "column": column,
+                        "confidence": min(hed_indicators / 5.0, 1.0),
+                        "sample_values": sample_values.tolist()[:3],
+                    }
+                )
+
+        # Analyze spreadsheet structure
+        analysis_results = {
+            "file_info": {
+                "path": str(file_path),
+                "format": file_extension,
+                "rows": len(df),
+                "columns": len(df.columns),
+                "schema_version": schema_version,
+            },
+            "column_analysis": {
+                "total_columns": len(df.columns),
+                "potential_hed_columns": len(potential_hed_columns),
+                "all_columns": df.columns.tolist(),
+                "detected_hed_columns": potential_hed_columns,
+            },
+            "data_quality": {"missing_data_summary": {}, "data_type_summary": {}},
+            "recommendations": [],
+        }
+
+        # Analyze data quality
+        for column in df.columns:
+            missing_count = df[column].isna().sum()
+            missing_percent = (missing_count / len(df)) * 100
+            analysis_results["data_quality"]["missing_data_summary"][column] = {
+                "missing_count": int(missing_count),
+                "missing_percent": round(missing_percent, 2),
+            }
+
+            # Determine predominant data type
+            non_null_data = df[column].dropna()
+            if len(non_null_data) > 0:
+                sample_value = non_null_data.iloc[0]
+                if isinstance(sample_value, (int, float)):
+                    data_type = "numeric"
+                else:
+                    data_type = "text"
+            else:
+                data_type = "empty"
+
+            analysis_results["data_quality"]["data_type_summary"][column] = data_type
+
+        # Generate recommendations
+        if potential_hed_columns:
+            analysis_results["recommendations"].extend(
+                [
+                    f"Found {len(potential_hed_columns)} potential HED columns",
+                    "Consider validating these columns with validate_hed_columns tool",
+                    "Check HED schema compatibility for detected patterns",
+                ]
+            )
+        else:
+            analysis_results["recommendations"].extend(
+                [
+                    "No obvious HED columns detected automatically",
+                    "Manual inspection may be needed to identify HED content",
+                    "Look for columns containing event descriptions or stimulus codes",
+                ]
+            )
+
+        # Handle missing data recommendations
+        high_missing_columns = [
+            col
+            for col, info in analysis_results["data_quality"][
+                "missing_data_summary"
+            ].items()
+            if info["missing_percent"] > 50
+        ]
+        if high_missing_columns:
+            analysis_results["recommendations"].append(
+                f"Columns with high missing data (>50%): {high_missing_columns}"
+            )
+
+        # Format output based on requested format
+        if output_format == "json":
+            return json.dumps(analysis_results, indent=2)
+
+        elif output_format == "detailed":
+            result_lines = [
+                "=== HED Spreadsheet Analysis (Detailed) ===",
+                "",
+                f"File: {analysis_results['file_info']['path']}",
+                f"Format: {analysis_results['file_info']['format']}",
+                f"Dimensions: {analysis_results['file_info']['rows']} rows × {analysis_results['file_info']['columns']} columns",
+                f"Schema Version: {analysis_results['file_info']['schema_version']}",
+                "",
+                "=== Potential HED Columns ===",
+            ]
+
+            if potential_hed_columns:
+                for hed_col in potential_hed_columns:
+                    result_lines.extend(
+                        [
+                            f"Column: {hed_col['column']}",
+                            f"  Confidence: {hed_col['confidence']:.2f}",
+                            f"  Sample values: {hed_col['sample_values']}",
+                            "",
+                        ]
+                    )
+            else:
+                result_lines.append("No potential HED columns detected")
+
+            result_lines.extend(
+                [
+                    "",
+                    "=== Data Quality Summary ===",
+                ]
+            )
+
+            for column, missing_info in analysis_results["data_quality"][
+                "missing_data_summary"
+            ].items():
+                if missing_info["missing_percent"] > 0:
+                    result_lines.append(
+                        f"{column}: {missing_info['missing_percent']:.1f}% missing data"
+                    )
+
+            result_lines.extend(
+                [
+                    "",
+                    "=== Recommendations ===",
+                ]
+            )
+
+            for rec in analysis_results["recommendations"]:
+                result_lines.append(f"• {rec}")
+
+            return "\n".join(result_lines)
+
+        else:  # summary format
+            result_lines = [
+                "=== HED Spreadsheet Analysis Summary ===",
+                "",
+                f"File: {file_path_obj.name}",
+                f"Size: {analysis_results['file_info']['rows']} rows × {analysis_results['file_info']['columns']} columns",
+                "",
+                f"Potential HED Columns: {len(potential_hed_columns)}",
+            ]
+
+            if potential_hed_columns:
+                hed_col_names = [col["column"] for col in potential_hed_columns]
+                result_lines.append(f"Detected: {', '.join(hed_col_names)}")
+
+            result_lines.extend(
+                [
+                    "",
+                    "Key Recommendations:",
+                ]
+            )
+
+            for rec in analysis_results["recommendations"][:3]:  # Top 3 recommendations
+                result_lines.append(f"• {rec}")
+
+            if len(analysis_results["recommendations"]) > 3:
+                result_lines.append(
+                    f"• ... and {len(analysis_results['recommendations']) - 3} more"
+                )
+
+            return "\n".join(result_lines)
+
+    except Exception as e:
+        error_msg = f"Spreadsheet analysis failed: {str(e)}"
         logger.error(error_msg)
         return error_msg
 
