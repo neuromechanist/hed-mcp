@@ -2,4 +2,42 @@
 
 This module provides direct integration with the HED Python tools library,
 including wrappers and utilities for HED schema handling and validation.
-""" 
+"""
+
+from .hed_wrapper import HEDWrapper, create_hed_wrapper, HEDIntegration
+from .schema import SchemaHandler, SchemaManagerFacade
+from .models import (
+    # Configuration models
+    HEDWrapperConfig, SchemaConfig, ValidationConfig, TabularSummaryConfig,
+    BatchProcessingConfig,
+    
+    # Data models
+    EventsData, ColumnInfo, ValidationResult, SidecarTemplate, 
+    SchemaInfo, OperationResult,
+)
+
+__all__ = [
+    # Main wrapper classes
+    'HEDWrapper',
+    'HEDIntegration', 
+    'create_hed_wrapper',
+    
+    # Schema handling
+    'SchemaHandler',
+    'SchemaManagerFacade',
+    
+    # Configuration models
+    'HEDWrapperConfig',
+    'SchemaConfig',
+    'ValidationConfig', 
+    'TabularSummaryConfig',
+    'BatchProcessingConfig',
+    
+    # Data models
+    'EventsData',
+    'ColumnInfo',
+    'ValidationResult',
+    'SidecarTemplate',
+    'SchemaInfo',
+    'OperationResult',
+] 
