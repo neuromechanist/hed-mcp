@@ -185,7 +185,7 @@ RUN uv sync --no-dev
 EXPOSE 8000
 
 # Run the server
-CMD ["uv", "run", "python", "-m", "hedtools_integration.server"]
+CMD ["uv", "run", "python", "-m", "hed_tools.server"]
 ```
 
 ### Building and Running
@@ -222,15 +222,15 @@ services:
 
 ```bash
 # Test package imports
-python -c "import hedtools_integration; print('✅ Package imported successfully')"
+python -c "import hed_tools; print('✅ Package imported successfully')"
 
 # Run import tests
 uv run python tests/test_imports.py
 
 # Check package info
 python -c "
-import hedtools_integration
-info = hedtools_integration.get_package_info()
+import hed_tools
+info = hed_tools.get_package_info()
 print(f'Package: {info[\"name\"]} v{info[\"version\"]}')
 print(f'Components available: {sum(info[\"components\"].values())}/4')
 "
@@ -241,8 +241,8 @@ print(f'Components available: {sum(info[\"components\"].values())}/4')
 ```bash
 # Check all dependencies
 python -c "
-import hedtools_integration
-validation = hedtools_integration.validate_installation()
+import hed_tools
+validation = hed_tools.validate_installation()
 print('Installation Status:', '✅ Valid' if validation['valid'] else '❌ Issues')
 for error in validation['errors']:
     print(f'Error: {error}')
@@ -256,7 +256,7 @@ for warning in validation['warnings']:
 ```bash
 # Test server creation
 python -c "
-from hedtools_integration import create_server
+from hed_tools import create_server
 server = create_server()
 info = server.get_server_info()
 print(f'Server: {info[\"name\"]} ready: {info[\"ready\"]}')
@@ -324,8 +324,8 @@ uv sync --dev
 # The package will run in stub mode
 # Check installation status
 python -c "
-import hedtools_integration
-validation = hedtools_integration.validate_installation()
+import hed_tools
+validation = hed_tools.validate_installation()
 print(validation['recommendations'])
 "
 ```
@@ -398,9 +398,9 @@ print(f'Python: {sys.version}')
 print(f'Platform: {platform.platform()}')
 print(f'Architecture: {platform.architecture()}')
 try:
-    import hedtools_integration
-    print(f'Package: {hedtools_integration.__version__}')
-    print(f'Installation: {hedtools_integration.validate_installation()}')
+    import hed_tools
+    print(f'Package: {hed_tools.__version__}')
+    print(f'Installation: {hed_tools.validate_installation()}')
 except Exception as e:
     print(f'Package Error: {e}')
 "

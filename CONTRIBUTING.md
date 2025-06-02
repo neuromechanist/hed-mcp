@@ -170,8 +170,8 @@ import pandas as pd
 from fastmcp import FastMCP
 
 # Local imports last
-from hedtools_integration.hed_integration import HEDWrapper
-from hedtools_integration.utils import FileHandler
+from hed_tools.hed_integration import HEDWrapper
+from hed_tools.utils import FileHandler
 ```
 
 ### Error Handling
@@ -236,7 +236,7 @@ def test_function_name():
 uv run pytest
 
 # Run with coverage
-uv run pytest --cov=src/hedtools_integration --cov-report=html
+uv run pytest --cov=src/hed_tools --cov-report=html
 
 # Run specific test categories
 uv run pytest -m unit

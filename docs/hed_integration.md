@@ -106,7 +106,7 @@ graph TD
 The integration supports HED schema versions 8.0.0 and higher:
 
 ```python
-from hedtools_integration import create_hed_wrapper
+from hed_tools import create_hed_wrapper
 
 wrapper = create_hed_wrapper()
 schemas = wrapper.get_available_schemas()
@@ -169,7 +169,7 @@ TabularSummary is a core hedtools component that generates HED sidecar templates
 ### Basic TabularSummary Workflow
 
 ```python
-from hedtools_integration import create_hed_wrapper, create_file_handler
+from hed_tools import create_hed_wrapper, create_file_handler
 import pandas as pd
 
 # Load events data
@@ -206,7 +206,7 @@ Columns suitable for HED annotation:
 - `stimulus`: Stimulus identifiers
 
 ```python
-from hedtools_integration import create_column_analyzer
+from hed_tools import create_column_analyzer
 
 analyzer = create_column_analyzer()
 analysis = await analyzer.analyze_events_file(Path("events.tsv"))
@@ -259,7 +259,7 @@ await handler.save_json_file(sidecar, Path("custom_events.json"))
 ### BIDS Compliance Validation
 
 ```python
-from hedtools_integration import create_file_handler
+from hed_tools import create_file_handler
 
 handler = create_file_handler()
 
@@ -311,7 +311,7 @@ This example demonstrates the full workflow from BIDS events analysis to HED sid
 ```python
 async def complete_hed_workflow(events_path: str):
     """Complete HED annotation workflow."""
-    from hedtools_integration import create_integration_suite
+    from hed_tools import create_integration_suite
     from pathlib import Path
     
     # Initialize components

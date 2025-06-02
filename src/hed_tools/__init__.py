@@ -95,7 +95,7 @@ def get_package_info() -> dict:
         Dictionary with package metadata and component availability
     """
     return {
-        "name": "hedtools-integration",
+        "name": "hed-tools",
         "version": __version__,
         "description": "Integration tools for HED through MCP server interface",
         "components": {
@@ -203,14 +203,15 @@ def quick_analyze_events(file_path, output_path=None):
     import asyncio
     from pathlib import Path
     
-    analyzer = create_column_analyzer()
-    
     async def _analyze():
-        return await analyzer.analyze_events_file(Path(file_path))
+        analyzer = create_column_analyzer()
+        results = await analyzer.analyze_events_file(Path(file_path))
+        
+        if output_path:
+            import json
+            with open(output_path, 'w') as f:
+                json.dump(results, f, indent=2)
+        
+        return results
     
-    results = asyncio.run(_analyze())
-    
-    if output_path and FileHandler is not None:
-        asyncio.run(FileHandler.save_json_file(results, Path(output_path)))
-    
-    return results 
+    return asyncio.run(_analyze()) 

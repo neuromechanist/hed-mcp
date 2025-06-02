@@ -18,11 +18,11 @@ This guide covers how to use the HED MCP Server for BIDS events analysis and HED
 ### Basic Package Usage
 
 ```python
-import hedtools_integration
+import hed_tools
 from pathlib import Path
 
 # Create integration suite
-suite = hedtools_integration.create_integration_suite()
+suite = hed_tools.create_integration_suite()
 
 # Analyze a BIDS events file
 analyzer = suite['column_analyzer']
@@ -34,7 +34,7 @@ print(f"Found {len(results['hed_candidates'])} columns suitable for HED annotati
 ### MCP Server Usage
 
 ```python
-from hedtools_integration import create_server
+from hed_tools import create_server
 
 # Create and start MCP server
 server = create_server()
@@ -46,13 +46,13 @@ await server.start("stdio")  # For use with Claude/AI clients
 ```bash
 # Test package functionality
 uv run python -c "
-import hedtools_integration
-info = hedtools_integration.get_package_info()
+import hed_tools
+info = hed_tools.get_package_info()
 print(f'HED MCP Server v{info[\"version\"]} ready!')
 "
 
 # Run the MCP server
-uv run python -m hedtools_integration.server
+uv run python -m hed_tools.server
 ```
 
 ## Core Components
@@ -64,7 +64,7 @@ The HED MCP Server consists of four main components:
 Provides a simplified interface to HED Python tools:
 
 ```python
-from hedtools_integration import create_hed_wrapper
+from hed_tools import create_hed_wrapper
 
 # Create wrapper with specific schema version
 wrapper = create_hed_wrapper(schema_version="8.2.0")
@@ -84,7 +84,7 @@ sidecar = await wrapper.generate_sidecar_template(events_df)
 Analyzes BIDS events files and classifies columns:
 
 ```python
-from hedtools_integration import create_column_analyzer
+from hed_tools import create_column_analyzer
 
 analyzer = create_column_analyzer()
 
@@ -104,7 +104,7 @@ for candidate in hed_candidates:
 Handles various file formats used in BIDS and HED workflows:
 
 ```python
-from hedtools_integration import create_file_handler
+from hed_tools import create_file_handler
 
 handler = create_file_handler()
 
@@ -123,7 +123,7 @@ validation = await handler.validate_bids_events_structure(Path("events.tsv"))
 Provides MCP tools for AI integration:
 
 ```python
-from hedtools_integration import create_server
+from hed_tools import create_server
 
 server = create_server()
 
@@ -144,7 +144,7 @@ await server.start("stdio")
 ```python
 import pandas as pd
 from pathlib import Path
-from hedtools_integration import create_file_handler
+from hed_tools import create_file_handler
 
 handler = create_file_handler()
 
@@ -161,7 +161,7 @@ if not validation['valid']:
 **Step 2: Analyze columns for HED suitability**
 
 ```python
-from hedtools_integration import create_column_analyzer
+from hed_tools import create_column_analyzer
 
 analyzer = create_column_analyzer()
 
@@ -199,7 +199,7 @@ for candidate in analysis['hed_candidates']:
 **Loading different schema versions:**
 
 ```python
-from hedtools_integration import create_hed_wrapper
+from hed_tools import create_hed_wrapper
 
 # Use latest schema
 wrapper = create_hed_wrapper()
@@ -239,7 +239,7 @@ print(f"Tags found: {len(parsed['tags'])}")
 **Basic sidecar generation:**
 
 ```python
-from hedtools_integration import create_hed_wrapper
+from hed_tools import create_hed_wrapper
 
 wrapper = create_hed_wrapper()
 await wrapper.load_schema()
@@ -249,7 +249,7 @@ columns_to_process = ['trial_type', 'response', 'condition']
 sidecar = await wrapper.generate_sidecar_template(events_df, columns_to_process)
 
 # Save sidecar
-from hedtools_integration import create_file_handler
+from hed_tools import create_file_handler
 handler = create_file_handler()
 await handler.save_json_file(sidecar, Path("events.json"))
 ```
@@ -291,7 +291,7 @@ The HED MCP Server provides tools for AI-powered HED annotation through the Mode
   "mcpServers": {
     "hed-mcp": {
       "command": "uv",
-      "args": ["run", "python", "-m", "hedtools_integration.server"],
+      "args": ["run", "python", "-m", "hed_tools.server"],
       "cwd": "/path/to/hed-mcp"
     }
   }
@@ -301,7 +301,7 @@ The HED MCP Server provides tools for AI-powered HED annotation through the Mode
 **Programmatic server usage:**
 
 ```python
-from hedtools_integration import create_server
+from hed_tools import create_server
 import asyncio
 
 async def run_server():
@@ -442,7 +442,7 @@ class HEDServer:
 ```python
 async def analyze_bids_events(events_path: str):
     """Analyze BIDS events file for HED annotation readiness."""
-    from hedtools_integration import create_column_analyzer
+    from hed_tools import create_column_analyzer
     from pathlib import Path
     
     analyzer = create_column_analyzer()
@@ -473,7 +473,7 @@ analysis = await analyze_bids_events("sub-01_task-faces_events.tsv")
 ```python
 async def generate_complete_sidecar(events_path: str, output_path: str = None):
     """Generate a complete HED sidecar from events file."""
-    from hedtools_integration import create_integration_suite
+    from hed_tools import create_integration_suite
     from pathlib import Path
     
     # Create all components
@@ -531,7 +531,7 @@ sidecar = await generate_complete_sidecar(
 ```python
 async def process_multiple_events_files(file_paths: List[str]):
     """Process multiple events files in batch."""
-    from hedtools_integration import create_integration_suite
+    from hed_tools import create_integration_suite
     import asyncio
     
     suite = create_integration_suite()
@@ -647,8 +647,8 @@ async def parallel_analysis(file_paths: List[Path]):
 
 ```python
 # Check component availability
-import hedtools_integration
-info = hedtools_integration.get_package_info()
+import hed_tools
+info = hed_tools.get_package_info()
 
 if not info['components']['hed_wrapper']:
     print("HED wrapper not available - install hedtools")
@@ -720,10 +720,10 @@ import logging
 
 # Enable debug logging
 logging.basicConfig(level=logging.DEBUG)
-logger = logging.getLogger('hedtools_integration')
+logger = logging.getLogger('hed_tools')
 
 # Check detailed component status
-validation = hedtools_integration.validate_installation()
+validation = hed_tools.validate_installation()
 for component, status in validation.items():
     logger.debug(f"{component}: {status}")
 ```

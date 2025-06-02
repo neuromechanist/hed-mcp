@@ -8,7 +8,7 @@ Usage:
     python examples/basic_usage.py [events_file.tsv]
 
 Requirements:
-    - hedtools_integration package installed
+    - hed_tools package installed
     - Sample BIDS events file (TSV format)
 """
 
@@ -20,8 +20,8 @@ import pandas as pd
 # Add src to path for development
 sys.path.insert(0, str(Path(__file__).parent.parent / "src"))
 
-import hedtools_integration
-from hedtools_integration import (
+import hed_tools
+from hed_tools import (
     create_integration_suite,
     create_column_analyzer,
     create_hed_wrapper,
@@ -76,7 +76,7 @@ async def demonstrate_package_info():
     print_banner("Package Information")
     
     # Get package info
-    info = hedtools_integration.get_package_info()
+    info = hed_tools.get_package_info()
     print(f"Package: {info['name']} v{info['version']}")
     print(f"Description: {info['description']}")
     
@@ -92,7 +92,7 @@ async def demonstrate_package_info():
     
     # Validate installation
     print("\nInstallation Validation:")
-    validation = hedtools_integration.validate_installation()
+    validation = hed_tools.validate_installation()
     
     if validation['valid']:
         print("✅ Installation is complete and ready to use!")
@@ -361,7 +361,7 @@ async def demonstrate_quick_analysis(events_path: Path):
     
     # Use the package-level convenience function
     try:
-        results = hedtools_integration.quick_analyze_events(
+        results = hed_tools.quick_analyze_events(
             str(events_path),
             str(events_path.with_suffix('_analysis.json'))
         )

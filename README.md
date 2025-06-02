@@ -145,7 +145,7 @@ uv run pytest
 
 ```
 hed-mcp/
-├── src/hedtools_integration/     # Main package
+├── src/hed_tools/     # Main package
 │   ├── server/                   # MCP server components
 │   ├── tools/                    # Analysis tools & MCP tools
 │   ├── hed_integration/         # HED-specific functionality
@@ -169,7 +169,7 @@ hed-mcp/
 uv run pytest
 
 # Run with coverage
-uv run pytest --cov=src/hedtools_integration
+uv run pytest --cov=src/hed_tools
 
 # Code formatting
 uv run black src/ tests/
@@ -191,7 +191,7 @@ uv add --dev package-name
 uv sync --upgrade
 
 # Run the server (when implemented)
-uv run python -m hedtools_integration.server
+uv run python -m hed_tools.server
 ```
 
 ## Installation (Coming Soon)
@@ -223,7 +223,7 @@ pip install hed-mcp-server
   "mcpServers": {
     "hed-mcp": {
       "command": "uv",
-      "args": ["run", "python", "-m", "hedtools_integration.server"],
+      "args": ["run", "python", "-m", "hed_tools.server"],
       "cwd": "/path/to/hed-mcp"
     }
   }
@@ -290,7 +290,7 @@ We welcome contributions! This project follows modern Python development practic
 uv run pytest
 
 # Run with coverage report
-uv run pytest --cov=src/hedtools_integration --cov-report=html
+uv run pytest --cov=src/hed_tools --cov-report=html
 
 # Run specific test categories
 uv run pytest -m unit
@@ -317,9 +317,9 @@ For questions about this project or HED integration, please:
 
 ## Links
 
-- **Homepage**: https://github.com/hed-standard/hed-mcp
-- **Documentation**: https://hed-mcp.readthedocs.io (coming soon)
-- **Issues**: https://github.com/hed-standard/hed-mcp/issues
+- **Homepage**: https://github.com/neuromechanist/hed-mcp
+- **Documentation**: https://github.com/neuromechanist/hed-mcp/blob/main/docs/ 
+- **Issues**: https://github.com/neuromechanist/hed-mcp/issues
 - **HED Tools**: https://github.com/hed-standard/hed-python
 
 ---

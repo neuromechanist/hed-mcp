@@ -13,14 +13,14 @@ sys.path.insert(0, str(Path(__file__).parent.parent / "src"))
 
 def test_package_import():
     """Test that the main package can be imported."""
-    import hedtools_integration
-    assert hedtools_integration.__version__ == "0.1.0"
-    assert hasattr(hedtools_integration, '__all__')
+    import hed_tools
+    assert hed_tools.__version__ == "0.1.0"
+    assert hasattr(hed_tools, '__all__')
 
 
 def test_core_imports():
     """Test that all core modules can be imported."""
-    from hedtools_integration import (
+    from hed_tools import (
         HEDServer, HEDWrapper, BIDSColumnAnalyzer, FileHandler
     )
     
@@ -33,7 +33,7 @@ def test_core_imports():
 
 def test_factory_functions():
     """Test that factory functions can be imported."""
-    from hedtools_integration import (
+    from hed_tools import (
         create_server, create_hed_wrapper, 
         create_column_analyzer, create_file_handler
     )
@@ -46,7 +46,7 @@ def test_factory_functions():
 
 def test_basic_instantiation():
     """Test basic class instantiation without errors."""
-    from hedtools_integration import (
+    from hed_tools import (
         HEDServer, HEDWrapper, BIDSColumnAnalyzer, FileHandler
     )
     
@@ -64,10 +64,10 @@ def test_basic_instantiation():
 
 def test_convenience_functions():
     """Test package-level convenience functions."""
-    import hedtools_integration
+    import hed_tools
     
     # Test get_package_info
-    info = hedtools_integration.get_package_info()
+    info = hed_tools.get_package_info()
     assert isinstance(info, dict)
     assert "name" in info
     assert "version" in info
@@ -75,7 +75,7 @@ def test_convenience_functions():
     assert "dependencies" in info
     
     # Test validate_installation
-    validation = hedtools_integration.validate_installation()
+    validation = hed_tools.validate_installation()
     assert isinstance(validation, dict)
     assert "valid" in validation
     assert "errors" in validation
@@ -85,13 +85,13 @@ def test_convenience_functions():
 
 def test_integration_suite():
     """Test creation of integration suite."""
-    import hedtools_integration
+    import hed_tools
     
-    suite = hedtools_integration.create_integration_suite()
+    suite = hed_tools.create_integration_suite()
     assert isinstance(suite, dict)
     
     # Check that available components are included
-    info = hedtools_integration.get_package_info()
+    info = hed_tools.get_package_info()
     for component, available in info["components"].items():
         if available:
             assert component in ["server", "hed_wrapper", "column_analyzer", "file_handler"]
@@ -99,7 +99,7 @@ def test_integration_suite():
 
 def test_server_module():
     """Test server module functionality."""
-    from hedtools_integration.server.server import HEDServer, create_server
+    from hed_tools.server.server import HEDServer, create_server
     
     server = create_server()
     assert isinstance(server, HEDServer)
@@ -116,7 +116,7 @@ def test_server_module():
 
 def test_hed_wrapper_module():
     """Test HED wrapper module functionality."""
-    from hedtools_integration.hed_integration.hed_wrapper import HEDWrapper, create_hed_wrapper
+    from hed_tools.hed_integration.hed_wrapper import HEDWrapper, create_hed_wrapper
     
     wrapper = create_hed_wrapper()
     assert isinstance(wrapper, HEDWrapper)
@@ -132,7 +132,7 @@ def test_hed_wrapper_module():
 
 def test_column_analyzer_module():
     """Test column analyzer module functionality."""
-    from hedtools_integration.tools.column_analyzer import BIDSColumnAnalyzer, create_column_analyzer
+    from hed_tools.tools.column_analyzer import BIDSColumnAnalyzer, create_column_analyzer
     
     analyzer = create_column_analyzer()
     assert isinstance(analyzer, BIDSColumnAnalyzer)
@@ -146,7 +146,7 @@ def test_column_analyzer_module():
 
 def test_file_handler_module():
     """Test file handler module functionality."""
-    from hedtools_integration.utils.file_utils import FileHandler, create_file_handler
+    from hed_tools.utils.file_utils import FileHandler, create_file_handler
     
     handler = create_file_handler()
     assert isinstance(handler, FileHandler)
@@ -159,15 +159,15 @@ def test_file_handler_module():
 def test_all_modules_importable():
     """Test that all modules in the package are importable."""
     modules_to_test = [
-        "hedtools_integration",
-        "hedtools_integration.server",
-        "hedtools_integration.server.server",
-        "hedtools_integration.hed_integration",
-        "hedtools_integration.hed_integration.hed_wrapper",
-        "hedtools_integration.tools",
-        "hedtools_integration.tools.column_analyzer",
-        "hedtools_integration.utils",
-        "hedtools_integration.utils.file_utils"
+        "hed_tools",
+        "hed_tools.server",
+        "hed_tools.server.server",
+        "hed_tools.hed_integration",
+        "hed_tools.hed_integration.hed_wrapper",
+        "hed_tools.tools",
+        "hed_tools.tools.column_analyzer",
+        "hed_tools.utils",
+        "hed_tools.utils.file_utils"
     ]
     
     for module_name in modules_to_test:
