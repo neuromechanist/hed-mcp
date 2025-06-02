@@ -9,8 +9,14 @@ from .bids_parser import (
     parse_bids_events,
 )
 from .column_analyzer import (
-    BIDSColumnAnalyzer,
+    ColumnAnalyzer,
     create_column_analyzer,
+    analyze_columns,
+)
+from .enhanced_column_analyzer import (
+    EnhancedColumnAnalyzer,
+    create_enhanced_column_analyzer,
+    analyze_columns_enhanced,
 )
 
 __all__ = [
@@ -19,6 +25,11 @@ __all__ = [
     "BIDSValidationError",
     "parse_bids_events",
     # Column analyzer
-    "BIDSColumnAnalyzer",
+    "ColumnAnalyzer",
     "create_column_analyzer",
+    "analyze_columns",
+    # Enhanced column analyzer
+    "EnhancedColumnAnalyzer",
+    "create_enhanced_column_analyzer",
+    "analyze_columns_enhanced",
 ]
