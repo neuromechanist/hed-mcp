@@ -18,9 +18,21 @@ from dataclasses import dataclass, field
 from pathlib import Path
 from typing import Any, Callable, Dict, Generator, Iterator, List, Optional, Tuple
 from contextlib import contextmanager
+import warnings
 
 import pandas as pd
-import psutil
+
+# Make psutil optional for graceful degradation
+try:
+    import psutil
+
+    HAS_PSUTIL = True
+except ImportError:
+    psutil = None
+    HAS_PSUTIL = False
+    warnings.warn(
+        "psutil not available - memory monitoring will be limited", UserWarning
+    )
 
 
 @dataclass
@@ -108,16 +120,25 @@ class MemoryManager:
 
     def get_memory_metrics(self) -> MemoryMetrics:
         """Get current memory usage metrics."""
-        memory = psutil.virtual_memory()
-        process = psutil.Process()
+        if HAS_PSUTIL:
+            memory = psutil.virtual_memory()
+            process = psutil.Process()
 
-        return MemoryMetrics(
-            total_memory_gb=memory.total / (1024**3),
-            available_memory_gb=memory.available / (1024**3),
-            used_memory_gb=memory.used / (1024**3),
-            memory_percent=memory.percent / 100.0,
-            process_memory_mb=process.memory_info().rss / (1024**2),
-        )
+            return MemoryMetrics(
+                total_memory_gb=memory.total / (1024**3),
+                available_memory_gb=memory.available / (1024**3),
+                used_memory_gb=memory.used / (1024**3),
+                memory_percent=memory.percent / 100.0,
+                process_memory_mb=process.memory_info().rss / (1024**2),
+            )
+        else:
+            return MemoryMetrics(
+                total_memory_gb=0.0,
+                available_memory_gb=0.0,
+                used_memory_gb=0.0,
+                memory_percent=0.0,
+                process_memory_mb=0.0,
+            )
 
     @contextmanager
     def memory_guard(self, operation_name: str = "operation"):
@@ -639,8 +660,11 @@ def create_optimized_config(
     """Create optimized configuration based on system resources."""
 
     # Get system memory info
-    memory = psutil.virtual_memory()
-    available_memory_gb = memory.available / (1024**3)
+    if HAS_PSUTIL:
+        memory = psutil.virtual_memory()
+        available_memory_gb = memory.available / (1024**3)
+    else:
+        available_memory_gb = 0.0
 
     # Adjust memory limit based on available memory
     safe_memory_limit = min(memory_limit_gb, available_memory_gb * 0.6)

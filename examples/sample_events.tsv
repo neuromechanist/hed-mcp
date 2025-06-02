@@ -1,0 +1,9 @@
+onset	duration	trial_type	response_time	accuracy	participant_id	stimulus_category
+0.0	1.5	go	0.456	1	P001	visual
+1.0	1.5	stop	0.623	1	P001	auditory
+2.0	1.5	go	0.398	0	P001	visual
+3.0	1.5	nogo		P001	tactile
+4.0	1.5	stop	0.587	1	P001	auditory
+5.0	1.5	go	0.445	1	P001	visual
+6.0	1.5	nogo		P001	tactile
+7.0	1.5	stop	0.612	0	P001	auditory
