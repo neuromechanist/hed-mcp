@@ -1,8 +1,8 @@
-"""BIDS events file column analysis and HED annotation tools.
+"""Enhanced BIDS events file column analysis with Strategy pattern.
 
-This module provides functionality to analyze BIDS events files, classify columns,
-and prepare them for HED annotation through automated sidecar generation.
-Enhanced with Strategy pattern and specialized column type analyzers.
+This module provides a sophisticated column analysis engine that uses the Strategy
+pattern to implement specialized analyzers for different column types with
+comprehensive BIDS pattern recognition and statistical analysis.
 """
 
 import re
@@ -190,6 +190,7 @@ class NumericColumnAnalyzer(BaseColumnAnalyzer):
             "precision_issues": bool(
                 np.any(np.abs(values - np.round(values, 10)) > 1e-10)
             ),
+            "has_issues": stats["outlier_percentage"] > 10 or stats["cv"] > 2,
         }
 
     def _classify_distribution_shape(self, stats: Dict[str, Any]) -> str:
@@ -371,6 +372,8 @@ class CategoricalColumnAnalyzer(BaseColumnAnalyzer):
             "distribution_quality": "good"
             if 10 <= stats["most_frequent_percentage"] <= 90
             else "poor",
+            "has_issues": stats["most_frequent_percentage"] > 95
+            or stats["entropy"] < 0.5,
         }
 
 
@@ -504,11 +507,15 @@ class TemporalColumnAnalyzer(BaseColumnAnalyzer):
             else "medium"
             if np.std(values) < 0.01
             else "low",
+            "has_issues": bool(np.any(values < 0)),
         }
 
         if "onset" in column_name.lower():
             quality["onset_order"] = (
                 "sorted" if np.all(values[:-1] <= values[1:]) else "unsorted"
+            )
+            quality["has_issues"] = (
+                quality["has_issues"] or quality["onset_order"] == "unsorted"
             )
 
         return quality
@@ -642,129 +649,17 @@ class TextColumnAnalyzer(BaseColumnAnalyzer):
             "completeness": "good"
             if series.notna().sum() / len(series) > 0.95
             else "poor",
+            "has_issues": bool(stats["min_length"] < 3 or stats["max_length"] > 1000),
         }
 
 
-class HedTagColumnAnalyzer(BaseColumnAnalyzer):
-    """Analyzer for HED tag columns."""
-
-    HED_PATTERNS = [r".*hed.*", r".*tag.*", r".*annotation.*"]
-
-    def can_analyze(self, series: pd.Series, column_name: str) -> bool:
-        """Check if column contains HED tags."""
-        # Check column name
-        name_match = any(
-            re.match(pattern, column_name.lower()) for pattern in self.HED_PATTERNS
-        )
-
-        if not name_match:
-            return False
-
-        # Check content for HED tag patterns
-        clean_series = series.dropna().astype(str)
-        if clean_series.empty:
-            return False
-
-        # Look for HED tag patterns (hierarchical structure with slashes)
-        sample_text = " ".join(clean_series.head(10))
-        has_hed_structure = bool(re.search(r"\w+/\w+", sample_text))
-
-        return has_hed_structure
-
-    def analyze(self, series: pd.Series, column_name: str) -> Dict[str, Any]:
-        """Analyze HED tag column with tag-specific metrics."""
-        basic_stats = self._get_basic_stats(series)
-        clean_series = series.dropna().astype(str)
-
-        if clean_series.empty:
-            return {**basic_stats, "type": ColumnType.HED_TAGS.value, "statistics": {}}
-
-        # HED tag analysis
-        tag_analysis = self._analyze_hed_tags(clean_series.tolist())
-
-        return {
-            **basic_stats,
-            "type": ColumnType.HED_TAGS.value,
-            "hed_analysis": tag_analysis,
-            "data_quality": self._assess_hed_quality(clean_series, tag_analysis),
-        }
-
-    def _analyze_hed_tags(self, tags: List[str]) -> Dict[str, Any]:
-        """Analyze HED tag structure and content."""
-        all_tags = []
-        hierarchies = []
-
-        for tag_string in tags:
-            # Split by commas to get individual tags
-            individual_tags = [tag.strip() for tag in tag_string.split(",")]
-            all_tags.extend(individual_tags)
-
-            # Analyze hierarchy depth
-            for tag in individual_tags:
-                hierarchy_depth = tag.count("/")
-                hierarchies.append(hierarchy_depth)
-
-        return {
-            "total_tags": len(all_tags),
-            "unique_tags": len(set(all_tags)),
-            "tag_diversity": float(len(set(all_tags)) / len(all_tags))
-            if len(all_tags) > 0
-            else 0,
-            "average_hierarchy_depth": float(np.mean(hierarchies))
-            if hierarchies
-            else 0,
-            "max_hierarchy_depth": int(np.max(hierarchies)) if hierarchies else 0,
-            "common_root_tags": self._find_common_roots(all_tags),
-            "tag_complexity": self._assess_tag_complexity(all_tags),
-        }
-
-    def _find_common_roots(self, tags: List[str]) -> List[str]:
-        """Find most common root tags."""
-        roots = []
-        for tag in tags:
-            if "/" in tag:
-                root = tag.split("/")[0]
-                roots.append(root)
-            else:
-                roots.append(tag)
-
-        from collections import Counter
-
-        common_roots = Counter(roots).most_common(5)
-        return [root for root, count in common_roots]
-
-    def _assess_tag_complexity(self, tags: List[str]) -> str:
-        """Assess complexity of HED tag structure."""
-        avg_depth = np.mean([tag.count("/") for tag in tags]) if tags else 0
-
-        if avg_depth < 1:
-            return "simple"
-        elif avg_depth < 2:
-            return "moderate"
-        else:
-            return "complex"
-
-    def _assess_hed_quality(
-        self, series: pd.Series, analysis: Dict[str, Any]
-    ) -> Dict[str, Any]:
-        """Assess data quality for HED tag columns."""
-        return {
-            "tag_diversity": analysis.get("tag_diversity", 0),
-            "hierarchy_consistency": "good"
-            if analysis.get("average_hierarchy_depth", 0) > 0
-            else "poor",
-            "complexity_level": analysis.get("tag_complexity", "unknown"),
-        }
-
-
-class ColumnAnalyzer:
+class EnhancedColumnAnalyzer:
     """Enhanced column analyzer with strategy pattern and BIDS pattern recognition."""
 
     def __init__(self):
         """Initialize the enhanced column analyzer."""
         self.analyzers = [
             TemporalColumnAnalyzer(),
-            HedTagColumnAnalyzer(),
             NumericColumnAnalyzer(),
             CategoricalColumnAnalyzer(),
             TextColumnAnalyzer(),
@@ -902,7 +797,7 @@ class ColumnAnalyzer:
         return {
             **basic_stats,
             "type": ColumnType.MIXED.value,
-            "data_quality": {"classification": "unclassified"},
+            "data_quality": {"classification": "unclassified", "has_issues": True},
         }
 
     def _get_file_info(
@@ -1089,16 +984,16 @@ class ColumnAnalyzer:
 
 
 # Convenience functions
-def create_column_analyzer() -> ColumnAnalyzer:
-    """Create a new column analyzer instance."""
-    return ColumnAnalyzer()
+def create_enhanced_column_analyzer() -> EnhancedColumnAnalyzer:
+    """Create a new enhanced column analyzer instance."""
+    return EnhancedColumnAnalyzer()
 
 
-async def analyze_columns(
+async def analyze_columns_enhanced(
     data: Union[pd.DataFrame, Path, str], source_file: Optional[Path] = None
 ) -> Dict[str, Any]:
-    """Convenience function to analyze columns in data."""
-    analyzer = create_column_analyzer()
+    """Convenience function to analyze columns using enhanced analyzer."""
+    analyzer = create_enhanced_column_analyzer()
 
     if isinstance(data, (Path, str)):
         # Load data from file
