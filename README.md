@@ -117,7 +117,7 @@ pip install uv
 
 ```bash
 # Clone the repository
-git clone https://github.com/hed-standard/hed-mcp.git
+git clone https://github.com/neuromechanist/hed-mcp.git
 cd hed-mcp
 
 # Set up development environment with uv
@@ -191,45 +191,208 @@ uv add --dev package-name
 # Update dependencies
 uv sync --upgrade
 
-# Run the server (when implemented)
+# Run the server
+uv run hed-mcp-server
+
+# Or run as a Python module
 uv run python -m hed_tools.server
 ```
 
-## Installation (Coming Soon)
+## Installation
+
+### Development Installation
+
+If you want to install from source for development:
+
+```bash
+# Clone the repository
+git clone https://github.com/neuromechanist/hed-mcp.git
+cd hed-mcp
+
+# Set up development environment with uv
+uv sync --dev
+
+# Install in editable mode
+uv run pip install -e .
+```
 
 ### From PyPI (When Available)
 
 ```bash
 # Install from PyPI (when available)
-uv add hed-mcp-server
+pip install hed-mcp
 
-# Or install in a new environment
-uv venv hed-mcp-env
-uv pip install hed-mcp-server
+# Or with uv
+uv add hed-mcp
+```
+
+## Running the Server
+
+After installation, you can run the HED MCP server using any of these methods:
+
+### Method 1: Using the console script (recommended)
+```bash
+hed-mcp-server
+```
+
+### Method 2: Using uv run with the console script
+```bash
+uv run hed-mcp-server
+```
+
+### Method 3: Using Python module execution
+```bash
+python -m hed_tools.server
+
+# Or with uv
+uv run python -m hed_tools.server
 ```
 
 ### Using pip
 
 ```bash
 # Alternative installation method
-pip install hed-mcp-server
+pip install hed-mcp
 ```
 
-## Usage Examples (Coming Soon)
+## MCP Client Configuration
 
-### With Claude Desktop
+The HED MCP server can be configured in MCP clients using several approaches. Choose the method that works best for your environment.
 
+### Method 1: uvx Approach (Recommended)
+
+This approach uses `uvx` to run the package from the local tool installation, providing good environment isolation.
+
+**Prerequisites:**
+```bash
+# Build and install the package as a tool
+cd /path/to/hed-mcp
+uv build
+uv tool install dist/hed_mcp-*.whl
+```
+
+**Configuration:**
+```json
+{
+  "mcpServers": {
+    "hed-mcp": {
+      "command": "uvx",
+      "args": ["--from", "hed-mcp", "hed-mcp-server"]
+    }
+  }
+}
+```
+
+**Troubleshooting:**
+- **Error: `uvx not found`**: Install uv and ensure it's in your PATH
+- **Error: `No solution found`**: Make sure you've run `uv tool install` with the built wheel
+- **Error: `ModuleNotFoundError`**: Rebuild the package with `uv build` and reinstall
+
+### Method 2: Global Installation Approach
+
+This approach installs the package globally and uses the direct command.
+
+**Prerequisites:**
+```bash
+# Install as a global tool
+cd /path/to/hed-mcp
+uv tool install --editable .
+# Or install built wheel
+# uv tool install dist/hed_mcp-*.whl
+
+# Ensure the tool directory is in PATH
+export PATH="/Users/$(whoami)/.local/bin:$PATH"
+# Make permanent:
+uv tool update-shell
+```
+
+**Configuration:**
+```json
+{
+  "mcpServers": {
+    "hed-mcp": {
+      "command": "hed-mcp-server"
+    }
+  }
+}
+```
+
+**Alternative with absolute path:**
+```json
+{
+  "mcpServers": {
+    "hed-mcp": {
+      "command": "/Users/$(whoami)/.local/bin/hed-mcp-server"
+    }
+  }
+}
+```
+
+**Troubleshooting:**
+- **Error: `hed-mcp-server not found`**: Check if `/Users/$(whoami)/.local/bin` is in your PATH
+- **Error: PATH not updated**: Run `uv tool update-shell` and restart your terminal/IDE
+- **Environment issues**: Use the absolute path configuration as an alternative
+- **MCP client PATH issues**: The MCP client might not inherit your shell's PATH; use absolute path or environment variables
+
+### Method 3: uv run with --directory (Most Reliable)
+
+This approach uses `uv run` with explicit directory specification, providing the most reliable environment management.
+
+**Configuration:**
 ```json
 {
   "mcpServers": {
     "hed-mcp": {
       "command": "uv",
-      "args": ["run", "python", "-m", "hed_tools.server"],
-      "cwd": "/path/to/hed-mcp"
+      "args": ["run", "--directory", "/Users/$(whoami)/path/to/hed-mcp", "python", "-m", "hed_tools.server"],
+      "cwd": "/Users/$(whoami)/path/to/hed-mcp"
     }
   }
 }
 ```
+
+**Replace with your actual path:**
+```json
+{
+  "mcpServers": {
+    "hed-mcp": {
+      "command": "uv",
+      "args": ["run", "--directory", "/Users/yahya/Documents/git/hed-mcp", "python", "-m", "hed_tools.server"],
+      "cwd": "/Users/yahya/Documents/git/hed-mcp"
+    }
+  }
+}
+```
+
+**Troubleshooting:**
+- **Error: `uv not found`**: Install uv and ensure it's available in the MCP client's environment
+- **Error: `No such file or directory`**: Verify the path to your hed-mcp directory is correct
+- **Error: Module not found**: Ensure the project dependencies are installed with `uv sync`
+- **Permission issues**: Make sure the MCP client has read access to the project directory
+
+### Client-Specific Configuration Locations
+
+| **Client** | **Configuration File Location** |
+|------------|--------------------------------|
+| **Claude Desktop (macOS)** | `~/Library/Application Support/Claude/claude_desktop_config.json` |
+| **Claude Desktop (Windows)** | `%APPDATA%\Claude\claude_desktop_config.json` |
+| **Cursor** | `.cursor/mcp.json` in your workspace |
+| **Windsurf** | `~/.codeium/windsurf/mcp_config.json` |
+
+### General Troubleshooting Tips
+
+1. **Test the command manually first**: Before configuring in MCP, test the command in your terminal
+2. **Check logs**: Most MCP clients provide logs that can help diagnose connection issues
+3. **Use absolute paths**: When in doubt, use absolute paths instead of relative ones
+4. **Environment variables**: MCP clients may not inherit your shell environment
+5. **Restart after configuration**: Restart your MCP client after changing configuration
+6. **Virtual environment activation**: The `uv run` approach handles this automatically
+
+### Development vs Production
+
+- **Development**: Use Method 3 (`uv run --directory`) for the most reliable experience
+- **Production**: Use Method 1 (uvx) or Method 2 (global install) for cleaner configuration
+- **Team sharing**: Method 3 works best for teams since it doesn't require local installation
 
 ### Example Workflow
 

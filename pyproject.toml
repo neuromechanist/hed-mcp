@@ -42,7 +42,11 @@ dependencies = [
     "mcp>=1.8.0",
     "hedtools>=0.5.0",
     "psutil>=7.0.0",
+    "python-magic>=0.4.27",
 ]
+
+[project.scripts]
+hed-mcp-server = "hed_tools.server:main"
 
 [project.optional-dependencies]
 dev = [
@@ -157,9 +161,6 @@ dev = [
 
 [tool.hatch.metadata]
 allow-direct-references = true
-
-[tool.hatch.build.targets.sdist]
-packages = ["hed_tools"]
 
 [tool.hatch.build.targets.wheel.sources]
 "src" = ""
