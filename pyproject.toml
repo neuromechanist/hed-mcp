@@ -42,6 +42,7 @@ dependencies = [
     "mcp>=1.8.0",
     "hedtools>=0.5.0",
     "psutil>=7.0.0",
+    "python-magic>=0.4.27",
 ]
 
 [project.scripts]
