@@ -489,3 +489,25 @@ For questions about this project or HED integration, please:
 ---
 
 *This project aims to make HED annotation more accessible to the neuroimaging research community through AI-powered automation while maintaining scientific rigor and standards compliance.*
+
+## Repository Structure
+
+This repository is organized to separate different types of files clearly:
+
+- **`src/`** - Main source code for the HED MCP server
+- **`tests/`** - Automated unit and integration tests (pytest)
+- **`examples/`** - User-facing examples and documentation
+  - **`examples/sanity_checks/`** - Manual verification scripts and usage examples
+  - **`examples/data/`** - Sample HED files and test data
+- **`scripts/`** - User utility scripts (tracked in git)
+  - **`scripts/run_sanity_checks.py`** - Run all sanity check scripts with reporting
+- **`.scripts/`** - Development files (excluded from git)
+  - **`.scripts/example_prd.txt`** - Template PRD for Task Master
+  - **`.scripts/task-complexity-report.json`** - Task complexity analysis results
+- **`docs/`** - Documentation and guides
+- **`.cursor/`** - Cursor editor rules and configurations
+
+### Sanity Checks vs Unit Tests
+
+- **Sanity Checks** (`examples/sanity_checks/`): Manual verification tools that demonstrate functionality and help diagnose issues. These are not automated tests.
+- **Unit Tests** (`tests/`): Automated tests run by pytest for continuous integration and regression testing.
