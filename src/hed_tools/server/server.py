@@ -599,7 +599,11 @@ async def generate_hed_sidecar(
 
             except Exception as e:
                 logger.warning(f"Column analysis failed, using fallback: {str(e)}")
-                # Fallback: skip standard timing columns, use all others as value columns
+
+            # If column analysis failed or didn't provide good results, use BIDS fallback
+            if not detected_skip_columns and not detected_value_columns:
+                logger.info("Using BIDS convention fallback for column detection")
+                # Fallback: skip standard BIDS timing columns, use all others as value columns
                 timing_columns = ["onset", "duration", "sample"]
                 detected_skip_columns = [
                     col for col in timing_columns if col in df.columns
@@ -607,6 +611,10 @@ async def generate_hed_sidecar(
                 detected_value_columns = [
                     col for col in df.columns if col not in detected_skip_columns
                 ]
+
+                if ctx:
+                    ctx.info(f"Fallback - Skip columns: {detected_skip_columns}")
+                    ctx.info(f"Fallback - Value columns: {detected_value_columns}")
         else:
             # Use provided column lists
             detected_skip_columns = [
@@ -627,115 +635,56 @@ async def generate_hed_sidecar(
 
         # 4. Generate HED sidecar using TabularSummary
         try:
-            from ..hed_integration.tabular_summary import (
-                TabularSummaryWrapper,
-                TabularSummaryConfig,
-            )
-            from ..hed_integration.schema import SchemaHandler
+            # Use actual HED TabularSummary like the original HED-web tools
+            if HED_AVAILABLE:
+                try:
+                    from hed.tools.analysis.tabular_summary import TabularSummary
 
-            # Initialize components
-            schema_handler = SchemaHandler()
-            config = TabularSummaryConfig()
+                    # Create TabularSummary with proper skip and value columns
+                    tab_sum = TabularSummary(
+                        value_cols=detected_value_columns
+                        if detected_value_columns
+                        else None,
+                        skip_cols=detected_skip_columns
+                        if detected_skip_columns
+                        else None,
+                    )
 
-            async with TabularSummaryWrapper(config, schema_handler) as wrapper:
-                if ctx:
-                    ctx.info("Generating sidecar template using TabularSummary...")
+                    # Update with the dataframe data
+                    tab_sum.update(df)
 
-                # Generate the sidecar template
-                sidecar_template = await wrapper.extract_sidecar_template(
-                    data=df,
-                    skip_columns=detected_skip_columns
-                    if detected_skip_columns
-                    else None,
-                    use_cache=True,
-                )
+                    # Extract the sidecar template using HED's built-in method
+                    sidecar_content = tab_sum.extract_sidecar_template()
 
-                if not sidecar_template or not sidecar_template.template:
-                    return "Error: Failed to generate sidecar template"
+                    if ctx:
+                        ctx.info(
+                            "Successfully generated sidecar using HED TabularSummary"
+                        )
 
-                sidecar_content = sidecar_template.template
+                except ImportError as import_error:
+                    logger.warning(f"Could not import TabularSummary: {import_error}")
+                    raise Exception("TabularSummary import failed")
+                except Exception as tab_error:
+                    logger.error(f"TabularSummary processing failed: {tab_error}")
+                    raise Exception(f"TabularSummary processing failed: {tab_error}")
+            else:
+                raise Exception("HED components not available")
 
         except Exception as e:
             logger.error(f"TabularSummary integration failed: {str(e)}")
-            # Fallback: Generate basic sidecar structure
-            sidecar_content = {}
 
-            # If no value columns were detected, use a more comprehensive fallback
-            if not detected_value_columns:
-                logger.warning(
-                    "No value columns detected, using comprehensive fallback"
-                )
-                # Skip standard timing and sample columns, analyze all others
-                timing_columns = ["onset", "duration", "sample"]
-                potential_value_columns = [
-                    col for col in df.columns if col not in timing_columns
-                ]
+            # Only use fallback as last resort if HED tools completely fail
+            if not HED_AVAILABLE:
+                logger.warning("HED not available, using minimal fallback")
+                sidecar_content = {
+                    "ERROR": {
+                        "Description": "HED tools not available - this is a minimal fallback template",
+                        "HED": "Please install HED tools for proper sidecar generation",
+                    }
+                }
             else:
-                potential_value_columns = detected_value_columns
-
-            for col in potential_value_columns:
-                # Get unique values for the column
-                unique_vals = df[col].dropna().unique()
-
-                # More flexible threshold - allow up to 50 unique values or 25% of rows
-                max_unique_threshold = min(50, len(df) * 0.25)
-
-                if len(unique_vals) <= max_unique_threshold and len(unique_vals) > 0:
-                    # Create proper sidecar structure with levels
-                    unique_vals_clean = [
-                        str(val) for val in unique_vals if str(val) != "nan"
-                    ]
-                    if unique_vals_clean:
-                        sidecar_content[col] = {
-                            "Description": f"Column {col} values for experimental events",
-                            "HED": {val: "Event" for val in unique_vals_clean},
-                            "Levels": {
-                                val: f"Description for {val}"
-                                for val in unique_vals_clean
-                            },
-                        }
-                        logger.info(
-                            f"Added fallback sidecar entry for column '{col}' with {len(unique_vals_clean)} values"
-                        )
-
-            if not sidecar_content:
-                # Last resort: analyze all non-timing columns regardless of unique value count
-                logger.warning(
-                    "No suitable columns found with flexible threshold, analyzing all non-timing columns"
-                )
-                timing_columns = ["onset", "duration", "sample"]
-                for col in df.columns:
-                    if col not in timing_columns:
-                        unique_vals = df[col].dropna().unique()
-                        unique_vals_clean = [
-                            str(val) for val in unique_vals if str(val) != "nan"
-                        ]
-                        if len(unique_vals_clean) > 0:
-                            # For columns with many values, just provide basic HED structure
-                            if (
-                                len(unique_vals_clean) <= 100
-                            ):  # Still reasonable for a sidecar
-                                sidecar_content[col] = {
-                                    "Description": f"Column {col} values for experimental events",
-                                    "HED": {val: "Event" for val in unique_vals_clean},
-                                    "Levels": {
-                                        val: f"Description for {val}"
-                                        for val in unique_vals_clean
-                                    },
-                                }
-                            else:
-                                # For very large value sets, provide template structure only
-                                sidecar_content[col] = {
-                                    "Description": f"Column {col} values for experimental events (template - manually edit HED tags)",
-                                    "HED": "Event, (Label/#, Description/#)",
-                                }
-                            logger.info(
-                                f"Added last-resort sidecar entry for column '{col}' with {len(unique_vals_clean)} values"
-                            )
-                            break  # Add at least one column to avoid complete failure
-
-                if not sidecar_content:
-                    return "Error: No suitable columns found for HED annotation - all columns appear to be timing-related or empty"
+                # If HED is available but TabularSummary failed, this indicates a more serious issue
+                return f"Error: HED TabularSummary failed to process the events file: {str(e)}. Please check the file format and contents."
 
         # 5. Validation (if requested)
         validation_results = {}
