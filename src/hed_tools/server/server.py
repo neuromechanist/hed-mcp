@@ -659,16 +659,83 @@ async def generate_hed_sidecar(
             logger.error(f"TabularSummary integration failed: {str(e)}")
             # Fallback: Generate basic sidecar structure
             sidecar_content = {}
-            for col in detected_value_columns:
+
+            # If no value columns were detected, use a more comprehensive fallback
+            if not detected_value_columns:
+                logger.warning(
+                    "No value columns detected, using comprehensive fallback"
+                )
+                # Skip standard timing and sample columns, analyze all others
+                timing_columns = ["onset", "duration", "sample"]
+                potential_value_columns = [
+                    col for col in df.columns if col not in timing_columns
+                ]
+            else:
+                potential_value_columns = detected_value_columns
+
+            for col in potential_value_columns:
                 # Get unique values for the column
                 unique_vals = df[col].dropna().unique()
-                if (
-                    len(unique_vals) <= 20
-                ):  # Only include if reasonable number of values
-                    sidecar_content[col] = {"HED": "Event"}
+
+                # More flexible threshold - allow up to 50 unique values or 25% of rows
+                max_unique_threshold = min(50, len(df) * 0.25)
+
+                if len(unique_vals) <= max_unique_threshold and len(unique_vals) > 0:
+                    # Create proper sidecar structure with levels
+                    unique_vals_clean = [
+                        str(val) for val in unique_vals if str(val) != "nan"
+                    ]
+                    if unique_vals_clean:
+                        sidecar_content[col] = {
+                            "Description": f"Column {col} values for experimental events",
+                            "HED": {val: "Event" for val in unique_vals_clean},
+                            "Levels": {
+                                val: f"Description for {val}"
+                                for val in unique_vals_clean
+                            },
+                        }
+                        logger.info(
+                            f"Added fallback sidecar entry for column '{col}' with {len(unique_vals_clean)} values"
+                        )
 
             if not sidecar_content:
-                return "Error: No suitable columns found for HED annotation"
+                # Last resort: analyze all non-timing columns regardless of unique value count
+                logger.warning(
+                    "No suitable columns found with flexible threshold, analyzing all non-timing columns"
+                )
+                timing_columns = ["onset", "duration", "sample"]
+                for col in df.columns:
+                    if col not in timing_columns:
+                        unique_vals = df[col].dropna().unique()
+                        unique_vals_clean = [
+                            str(val) for val in unique_vals if str(val) != "nan"
+                        ]
+                        if len(unique_vals_clean) > 0:
+                            # For columns with many values, just provide basic HED structure
+                            if (
+                                len(unique_vals_clean) <= 100
+                            ):  # Still reasonable for a sidecar
+                                sidecar_content[col] = {
+                                    "Description": f"Column {col} values for experimental events",
+                                    "HED": {val: "Event" for val in unique_vals_clean},
+                                    "Levels": {
+                                        val: f"Description for {val}"
+                                        for val in unique_vals_clean
+                                    },
+                                }
+                            else:
+                                # For very large value sets, provide template structure only
+                                sidecar_content[col] = {
+                                    "Description": f"Column {col} values for experimental events (template - manually edit HED tags)",
+                                    "HED": "Event, (Label/#, Description/#)",
+                                }
+                            logger.info(
+                                f"Added last-resort sidecar entry for column '{col}' with {len(unique_vals_clean)} values"
+                            )
+                            break  # Add at least one column to avoid complete failure
+
+                if not sidecar_content:
+                    return "Error: No suitable columns found for HED annotation - all columns appear to be timing-related or empty"
 
         # 5. Validation (if requested)
         validation_results = {}
