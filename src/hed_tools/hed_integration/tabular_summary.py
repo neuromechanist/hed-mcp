@@ -566,22 +566,24 @@ class TabularSummaryWrapper:
         This method runs in a thread pool to avoid blocking.
         """
         try:
+            # Create TabularSummary with correct parameter names
             summary = TabularSummary(
-                data_input=df,
-                skip_columns=skip_columns,
-                value_columns=value_columns,
+                value_cols=value_columns,
+                skip_cols=skip_columns,
                 name=name,
             )
+
+            # Update with the DataFrame data
+            summary.update(df, name=name)
 
             return {
                 "summary": summary.get_summary(as_json=False),
                 "template": summary.extract_sidecar_template(),
-                "column_definitions": summary.get_column_def_names(),
-                "unique_values": {
-                    col: summary.get_unique_column_values(col)
-                    for col in df.columns
-                    if col not in (skip_columns or [])
-                },
+                "categorical_info": summary.categorical_info,
+                "value_info": summary.value_info,
+                "skip_columns": summary.skip_cols,
+                "total_events": summary.total_events,
+                "total_files": summary.total_files,
             }
 
         except Exception as e:

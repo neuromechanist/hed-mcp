@@ -551,62 +551,52 @@ async def generate_hed_sidecar(
         detected_value_columns = []
 
         if not skip_columns and not value_columns:
-            # Auto-detect column types
-            try:
-                from ..tools.column_analysis_engine import (
-                    BIDSColumnAnalysisEngine,
-                    AnalysisConfig,
+            # Simple, direct column classification logic
+
+            # Standard BIDS timing columns to skip
+            timing_columns = ["onset", "duration", "sample"]
+            detected_skip_columns = [col for col in timing_columns if col in df.columns]
+
+            # Analyze remaining columns to determine if they should be value columns
+            # (need numeric placeholders) vs categorical columns (default)
+            for col_name in df.columns:
+                if col_name in detected_skip_columns:
+                    continue
+
+                col_data = df[col_name].dropna()
+                if len(col_data) == 0:
+                    continue
+
+                # Check if column should be a value column (needs numeric placeholders)
+                unique_values = col_data.unique()
+                uniqueness_ratio = len(unique_values) / len(col_data)
+                is_numeric = pd.api.types.is_numeric_dtype(col_data)
+
+                # A column should be a value column if:
+                # 1. It's numeric AND
+                # 2. Has high uniqueness (continuous-like data) AND
+                # 3. Has many unique values (not categorical codes)
+                should_be_value_column = (
+                    is_numeric
+                    and uniqueness_ratio > 0.8  # High uniqueness
+                    and len(unique_values) > 20  # Many unique values
                 )
 
-                # Configure analysis engine for fast processing
-                config = AnalysisConfig(
-                    enable_enhanced_analysis=True,
-                    enable_memory_optimization=True,
-                    enable_chunked_processing=file_size
-                    > 10 * 1024 * 1024,  # Enable for files > 10MB
-                    enable_caching=True,
-                )
+                if should_be_value_column:
+                    detected_value_columns.append(col_name)
 
-                engine = BIDSColumnAnalysisEngine(config)
-                analysis_result = await engine.analyze_file(events_path)
+                # All other columns become categorical by default in TabularSummary
 
-                if analysis_result.success and analysis_result.enhanced_analysis:
-                    # Extract column classifications from analysis
-                    enhanced_data = analysis_result.enhanced_analysis
-
-                    # Standard BIDS timing columns to skip
-                    timing_columns = ["onset", "duration", "sample"]
-                    detected_skip_columns = [
-                        col for col in timing_columns if col in df.columns
-                    ]
-
-                    # Find categorical columns that are good HED candidates
-                    if "column_analysis" in enhanced_data:
-                        for col_name, col_info in enhanced_data[
-                            "column_analysis"
-                        ].items():
-                            if col_name not in detected_skip_columns:
-                                # Add categorical columns with reasonable unique value counts
-                                if (
-                                    col_info.get("type") == "categorical"
-                                    and col_info.get("unique_count", 0) < len(df) * 0.5
-                                ):
-                                    detected_value_columns.append(col_name)
-
-                if ctx:
-                    ctx.info(f"Auto-detected skip columns: {detected_skip_columns}")
-                    ctx.info(f"Auto-detected value columns: {detected_value_columns}")
-
-            except Exception as e:
-                logger.warning(f"Column analysis failed, using fallback: {str(e)}")
-                # Fallback: skip standard timing columns, use all others as value columns
-                timing_columns = ["onset", "duration", "sample"]
-                detected_skip_columns = [
-                    col for col in timing_columns if col in df.columns
+            if ctx:
+                ctx.info(f"Skip columns: {detected_skip_columns}")
+                ctx.info(f"Value columns (placeholders): {detected_value_columns}")
+                categorical_cols = [
+                    col
+                    for col in df.columns
+                    if col not in detected_skip_columns
+                    and col not in detected_value_columns
                 ]
-                detected_value_columns = [
-                    col for col in df.columns if col not in detected_skip_columns
-                ]
+                ctx.info(f"Categorical columns: {categorical_cols}")
         else:
             # Use provided column lists
             detected_skip_columns = [
@@ -627,48 +617,59 @@ async def generate_hed_sidecar(
 
         # 4. Generate HED sidecar using TabularSummary
         try:
-            from ..hed_integration.tabular_summary import (
-                TabularSummaryWrapper,
-                TabularSummaryConfig,
-            )
-            from ..hed_integration.schema import SchemaHandler
+            # Use actual HED TabularSummary like the original HED-web tools
+            if HED_AVAILABLE:
+                try:
+                    from hed.tools.analysis.tabular_summary import TabularSummary
 
-            # Initialize components
-            schema_handler = SchemaHandler()
-            config = TabularSummaryConfig()
+                    # Create TabularSummary with proper skip and value columns
+                    tab_sum = TabularSummary(
+                        value_cols=detected_value_columns
+                        if detected_value_columns
+                        else None,
+                        skip_cols=detected_skip_columns
+                        if detected_skip_columns
+                        else None,
+                    )
 
-            async with TabularSummaryWrapper(config, schema_handler) as wrapper:
-                if ctx:
-                    ctx.info("Generating sidecar template using TabularSummary...")
+                    # Update with the dataframe data
+                    tab_sum.update(df)
 
-                # Generate the sidecar template
-                sidecar_template = await wrapper.extract_sidecar_template(
-                    data=df,
-                    skip_columns=detected_skip_columns
-                    if detected_skip_columns
-                    else None,
-                    use_cache=True,
-                )
+                    # Extract the sidecar template using HED's built-in method
+                    sidecar_content = tab_sum.extract_sidecar_template()
 
-                if not sidecar_template or not sidecar_template.template:
-                    return "Error: Failed to generate sidecar template"
+                    if ctx:
+                        ctx.info(
+                            "Successfully generated sidecar using HED TabularSummary"
+                        )
 
-                sidecar_content = sidecar_template.template
+                except ImportError as import_error:
+                    logger.warning(f"Could not import TabularSummary: {import_error}")
+                    raise Exception("TabularSummary import failed")
+                except Exception as tab_error:
+                    logger.error(f"TabularSummary processing failed: {tab_error}")
+                    raise Exception(f"TabularSummary processing failed: {tab_error}")
+            else:
+                raise Exception("HED components not available")
 
         except Exception as e:
             logger.error(f"TabularSummary integration failed: {str(e)}")
-            # Fallback: Generate basic sidecar structure
-            sidecar_content = {}
-            for col in detected_value_columns:
-                # Get unique values for the column
-                unique_vals = df[col].dropna().unique()
-                if (
-                    len(unique_vals) <= 20
-                ):  # Only include if reasonable number of values
-                    sidecar_content[col] = {"HED": "Event"}
 
-            if not sidecar_content:
-                return "Error: No suitable columns found for HED annotation"
+            # Only use fallback as last resort if HED tools completely fail
+            if not HED_AVAILABLE:
+                logger.warning("HED not available, using minimal fallback")
+                sidecar_content = {
+                    "ERROR": {
+                        "Description": "HED tools not available - this is a minimal fallback template",
+                        "HED": "Please install HED tools for proper sidecar generation",
+                    }
+                }
+            else:
+                # If HED is available but TabularSummary failed, this indicates a more serious issue
+                return (
+                    f"Error: HED TabularSummary failed to process the events file: {str(e)}. "
+                    f"Please check the file format and contents."
+                )
 
         # 5. Validation (if requested)
         validation_results = {}
@@ -723,14 +724,16 @@ async def generate_hed_sidecar(
             f"📁 Output file: {output_path_obj}",
             f"📊 Columns analyzed: {len(df.columns)}",
             f"⏭️  Skip columns: {len(detected_skip_columns)} {detected_skip_columns}",
-            f"🎯 HED value columns: {len(sidecar_content)} {list(sidecar_content.keys())}",
+            f"🎯 HED annotated columns: {len(sidecar_content)} {list(sidecar_content.keys())}",
+            f"📈 Value columns (placeholders): {len(detected_value_columns)} {detected_value_columns}",
             f"⏱️  Processing time: {processing_time:.2f}s",
         ]
 
         if validation_results:
             if validation_results.get("validation_performed"):
                 result_lines.append(
-                    f"✅ Validation: {len(validation_results.get('errors', []))} errors, {len(validation_results.get('warnings', []))} warnings"
+                    f"✅ Validation: {len(validation_results.get('errors', []))} errors, "
+                    f"{len(validation_results.get('warnings', []))} warnings"
                 )
                 if validation_results.get("errors"):
                     result_lines.extend(
@@ -1170,7 +1173,8 @@ async def analyze_hed_spreadsheet(
                 "",
                 f"File: {analysis_results['file_info']['path']}",
                 f"Format: {analysis_results['file_info']['format']}",
-                f"Dimensions: {analysis_results['file_info']['rows']} rows × {analysis_results['file_info']['columns']} columns",
+                f"Dimensions: {analysis_results['file_info']['rows']} rows × "
+                f"{analysis_results['file_info']['columns']} columns",
                 f"Schema Version: {analysis_results['file_info']['schema_version']}",
                 "",
                 "=== Potential HED Columns ===",
@@ -1221,7 +1225,8 @@ async def analyze_hed_spreadsheet(
                 "=== HED Spreadsheet Analysis Summary ===",
                 "",
                 f"File: {file_path_obj.name}",
-                f"Size: {analysis_results['file_info']['rows']} rows × {analysis_results['file_info']['columns']} columns",
+                f"Size: {analysis_results['file_info']['rows']} rows × "
+                f"{analysis_results['file_info']['columns']} columns",
                 "",
                 f"Potential HED Columns: {len(potential_hed_columns)}",
             ]
