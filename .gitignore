@@ -75,3 +75,4 @@ uv.lock
 # IDE
 .vscode/
 .idea/
+.github/
