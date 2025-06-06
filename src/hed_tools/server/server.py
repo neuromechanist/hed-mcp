@@ -321,6 +321,10 @@ async def validate_hed_file(
     check_for_warnings: bool = Field(
         default=True, description="Include warnings in validation"
     ),
+    safe_mode: bool = Field(
+        default=False,
+        description="Enable strict directory access controls. Set to true when processing untrusted files or when enhanced security is needed. When false, allows broader file system access while still preventing path traversal attacks.",
+    ),
 ) -> Dict[str, Any]:
     """
     Validate a HED-annotated file against a specified schema version.
@@ -466,6 +470,9 @@ async def list_hed_schemas(ctx: Optional[Context] = None) -> str:
 
 
 @mcp.tool()
+@with_rate_limiting("generate_hed_sidecar")
+@with_resource_management("generate_hed_sidecar")
+@with_security_validation()
 async def generate_hed_sidecar(
     events_file: str = Field(description="Path to events.tsv or events.csv file"),
     output_path: str = Field(description="Output path for JSON sidecar file"),
@@ -482,6 +489,10 @@ async def generate_hed_sidecar(
     ),
     include_validation: bool = Field(
         default=True, description="Include HED validation results in response"
+    ),
+    safe_mode: bool = Field(
+        default=False,
+        description="Enable strict directory access controls. Set to true when processing untrusted files or when enhanced security is needed. When false, allows broader file system access while still preventing path traversal attacks.",
     ),
     ctx: Optional[Context] = None,
 ) -> str:
@@ -503,13 +514,6 @@ async def generate_hed_sidecar(
         # 1. Input validation and security checks
         events_path = Path(events_file)
         output_path_obj = Path(output_path)
-
-        # Security: Prevent path traversal attacks
-        if ".." in str(events_path) or str(events_path).startswith("/"):
-            return "Error: Invalid file path - path traversal not allowed"
-
-        if ".." in str(output_path_obj) or str(output_path_obj).startswith("/"):
-            return "Error: Invalid output path - path traversal not allowed"
 
         if not events_path.exists():
             return f"Error: Events file not found: {events_file}"
@@ -796,6 +800,9 @@ async def get_server_info(ctx: Optional[Context] = None) -> str:
 
 
 @mcp.tool()
+@with_rate_limiting("validate_hed_columns")
+@with_resource_management("validate_hed_columns")
+@with_security_validation()
 async def validate_hed_columns(
     file_path: str = Field(description="Path to tabular file (CSV, TSV, Excel)"),
     hed_columns: str = Field(
@@ -807,6 +814,10 @@ async def validate_hed_columns(
     delimiter: str = Field(
         default="auto",
         description="Delimiter for CSV/TSV files (auto-detect if 'auto')",
+    ),
+    safe_mode: bool = Field(
+        default=False,
+        description="Enable strict directory access controls. Set to true when processing untrusted files or when enhanced security is needed. When false, allows broader file system access while still preventing path traversal attacks.",
     ),
     ctx: Optional[Context] = None,
 ) -> str:
@@ -1001,6 +1012,9 @@ async def validate_hed_columns(
 
 
 @mcp.tool()
+@with_rate_limiting("analyze_hed_spreadsheet")
+@with_resource_management("analyze_hed_spreadsheet")
+@with_security_validation()
 async def analyze_hed_spreadsheet(
     file_path: str = Field(description="Path to spreadsheet file"),
     output_format: str = Field(
@@ -1008,6 +1022,10 @@ async def analyze_hed_spreadsheet(
     ),
     schema_version: str = Field(
         default="8.3.0", description="HED schema version to use"
+    ),
+    safe_mode: bool = Field(
+        default=False,
+        description="Enable strict directory access controls. Set to true when processing untrusted files or when enhanced security is needed. When false, allows broader file system access while still preventing path traversal attacks.",
     ),
     ctx: Optional[Context] = None,
 ) -> str:

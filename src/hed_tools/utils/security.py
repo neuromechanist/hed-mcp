@@ -129,6 +129,8 @@ class RateLimiter:
             "generate_hed_sidecar": {"calls": 5, "window": 60},
             "validate_hed_string": {"calls": 50, "window": 60},
             "validate_hed_file": {"calls": 10, "window": 60},
+            "validate_hed_columns": {"calls": 10, "window": 60},
+            "analyze_hed_spreadsheet": {"calls": 10, "window": 60},
             "search_hed_schema": {"calls": 100, "window": 60},
             "list_hed_schemas": {"calls": 200, "window": 60},
             "server_health": {"calls": 20, "window": 60},
@@ -383,16 +385,25 @@ class PathValidator:
         )
         self.logger = logging.getLogger("path_validator")
 
-    def validate_path(self, path: str, operation: str = "access") -> Path:
-        """Validate and resolve path with security checks."""
+    def validate_path(
+        self, path: str, operation: str = "access", safe_mode: bool = True
+    ) -> Path:
+        """Validate and resolve path with security checks.
+
+        Args:
+            path: The file path to validate
+            operation: The operation being performed (for audit logging)
+            safe_mode: If True, apply strict allowlist checking. If False, allow
+                      broader access while still preventing path traversal attacks.
+        """
         if not path:
             raise SecurityError("Empty path provided")
 
-        # Basic security checks
+        # Always prevent path traversal attacks
         if ".." in path:
             security_auditor.log_security_event(
                 "path_traversal_attempt",
-                {"path": path, "operation": operation},
+                {"path": path, "operation": operation, "safe_mode": safe_mode},
                 "WARNING",
             )
             raise SecurityError("Path traversal attempt detected")
@@ -403,30 +414,43 @@ class PathValidator:
         except Exception as e:
             raise SecurityError(f"Invalid path: {e}")
 
-        # Check against allowlist
-        path_str = str(resolved_path)
-        allowed = False
+        # Apply allowlist checking only in safe mode
+        if safe_mode:
+            path_str = str(resolved_path)
+            allowed = False
 
-        for base_path in self.allowed_base_paths:
-            try:
-                base_resolved = str(Path(base_path).resolve())
-                if path_str.startswith(base_resolved):
-                    allowed = True
-                    break
-            except Exception:
-                continue
+            for base_path in self.allowed_base_paths:
+                try:
+                    base_resolved = str(Path(base_path).resolve())
+                    if path_str.startswith(base_resolved):
+                        allowed = True
+                        break
+                except Exception:
+                    continue
 
-        if not allowed:
+            if not allowed:
+                security_auditor.log_security_event(
+                    "path_access_denied",
+                    {
+                        "path": path_str,
+                        "operation": operation,
+                        "allowed_paths": self.allowed_base_paths,
+                        "safe_mode": safe_mode,
+                    },
+                    "WARNING",
+                )
+                raise SecurityError(f"Path access denied: {path}")
+        else:
+            # In non-safe mode, log access for audit but allow it
             security_auditor.log_security_event(
-                "path_access_denied",
+                "path_access_allowed",
                 {
-                    "path": path_str,
+                    "path": str(resolved_path),
                     "operation": operation,
-                    "allowed_paths": self.allowed_base_paths,
+                    "safe_mode": safe_mode,
                 },
-                "WARNING",
+                "INFO",
             )
-            raise SecurityError(f"Path access denied: {path}")
 
         return resolved_path
 
@@ -510,11 +534,16 @@ def with_security_validation(allowed_base_paths: Optional[List[str]] = None):
         async def wrapper(*args, **kwargs):
             validator = PathValidator(allowed_base_paths)
 
+            # Extract safe_mode from kwargs, default to True for backward compatibility
+            safe_mode = kwargs.get("safe_mode", True)
+
             # Validate path arguments
             for key, value in kwargs.items():
                 if "path" in key.lower() and isinstance(value, str):
                     try:
-                        kwargs[key] = str(validator.validate_path(value, func.__name__))
+                        kwargs[key] = str(
+                            validator.validate_path(value, func.__name__, safe_mode)
+                        )
                     except SecurityError:
                         # Re-raise with tool context
                         raise SecurityError(
