@@ -269,9 +269,5 @@ This project is licensed under the BSD-3-Clause License - see the [LICENSE](LICE
 - **Homepage**: https://github.com/neuromechanist/hed-mcp
 - **Issues**: https://github.com/neuromechanist/hed-mcp/issues
 - **HED Tools**: https://github.com/hed-standard/hed-python
-- **HED Specification**: https://hed-specification.org
-- **BIDS Specification**: https://bids-specification.org
-
----
-
-*This project aims to make HED annotation more accessible to the neuroimaging research community through AI-powered automation while maintaining scientific rigor and standards compliance.*
+- **HED Specification**: https://hed-specification.readthedocs.io
+- **BIDS Specification**: https://bids-specification.readthedocs.io/en/stable/
